@@ -1,5 +1,5 @@
 return {
     name = "azwreader",
-    fullname = "AZW Reader",
-    description = "Adds DRM-free Amazon AZW/AZW3 handling to KOReader using Calibre-style MOBI header validation and KOReader's MuPDF backend.",
+    fullname = "AZW/KF8 Reader",
+    description = "Read DRM-free AZW3/KF8 books by reconstructing Calibre-style KF8 markup for CREngine.",
 }

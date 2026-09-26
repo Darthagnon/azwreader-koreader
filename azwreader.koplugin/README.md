@@ -1,52 +1,51 @@
-# AZW Reader for KOReader
+# AZW/KF8 Reader for KOReader - v0.2
 
-Experimental KOReader plugin for DRM-free Amazon AZW/AZW3 ebooks.
+This version no longer sends AZW3 directly to MuPDF.
 
-## What it does
+For DRM-free standalone KF8/AZW3 it follows the same structural path used by
+Calibre's MOBI8 reader:
 
-- Registers `.azw` and `.azw3` as readable document types in KOReader.
-- Parses the PalmDB/PalmDOC/MOBI header before opening the book.
-- Rejects malformed containers and DRM-encrypted books explicitly.
-- Passes valid DRM-free books to KOReader's bundled MuPDF MOBI engine.
+1. Read the PalmDB/MOBI records.
+2. Remove MOBI trailing record data.
+3. Decompress uncompressed or PalmDOC text records.
+4. Read `FDST` flow boundaries.
+5. Parse `SKEL` and `DIV` INDX tables.
+6. Reconstruct the original XHTML parts.
+7. Extract raster resources.
+8. Rewrite `kindle:flow`, `kindle:embed`, and `kindle:pos` references.
+9. Cache the reconstructed book under KOReader's data/cache directory and load
+   it with CREngine while keeping the original AZW3 as KOReader's document key.
 
-The header model is based on the same PalmDB/PalmDOC/MOBI structure used by
-Calibre's MOBI input/metadata code, but the Lua code here is a clean
-implementation for KOReader.
+## Tested input
 
-## Install
+Developed against the supplied `The Lost World (AmazonClassics - Sir Arthur Conan-Doyle.azw3`.
+It is standalone KF8 (MOBI v8), UTF-8, unencrypted, compression type 1, with
+24 SKEL parts and 77 DIV fragments.
 
-Copy the whole folder:
+## Current support
 
-    azwreader.koplugin
+- DRM-free standalone AZW3/KF8
+- compression type 1 (none)
+- compression type 2 (PalmDOC)
+- raster JPEG/PNG/GIF/BMP resources
+- KF8 CSS/SVG flows
+- approximate internal `kindle:pos` links (fragment target; offset ignored)
+- legacy `.azw` remains routed to KOReader's existing MuPDF MOBI backend
 
-to KOReader's `plugins` directory, then restart KOReader.
-
-Typical locations include:
-
-    koreader/plugins/azwreader.koplugin
-
-## Supported
-
-- DRM-free `.azw` MOBI-family books
-- DRM-free `.azw3` / KF8, subject to the MOBI support in the MuPDF version
-  bundled with your KOReader build
-
-## Not supported
+## Not yet supported
 
 - Amazon DRM
 - KFX
-- Topaz/AZW1
+- Topaz
+- HUFF/CDIC-compressed KF8
+- embedded KF8 fonts (font references fall back to KOReader fonts)
+- joint MOBI6+KF8 containers
+- exact `kindle:pos` offset placement / NCX reconstruction
 
-## Why this is deliberately small
+## Install
 
-KOReader already ships MuPDF with MOBI support, but its current document
-registry only exposes `.mobi`. Reusing that backend avoids carrying a second
-complete renderer in Lua.
+Copy the complete folder as:
 
-The separate `mobiheader.lua` module gives us a place to extend this into a
-full Calibre-style extractor later if KF8/AZW3 compatibility proves
-insufficient in MuPDF.
+    koreader/plugins/azwreader.koplugin/
 
-## Licence
-
-AGPL-3.0-or-later, matching KOReader's licensing model.
+The folder name must end in `.koplugin`. Restart KOReader afterwards.
