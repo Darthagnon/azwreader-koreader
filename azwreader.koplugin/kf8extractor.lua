@@ -474,7 +474,7 @@ function M.extract(path)
     local unique_id = u32(header, 32)
     local cache_root = DataStorage:getDataDir() .. "/cache/azwreader"
     util.makePath(cache_root)
-    local cache_dir = string.format("%s/v03_%08x_%d", cache_root, unique_id, #raw)
+    local cache_dir = string.format("%s/v04_%08x_%d", cache_root, unique_id, #raw)
     util.makePath(cache_dir)
     local html_path = cache_dir .. "/book.html"
 
@@ -555,22 +555,12 @@ function M.extract(path)
         if #best >= 2 then toc = best end
     end
 
-    -- CREngine builds its native ToC from heading elements. Inject zero-height
-    -- semantic headings at the Kindle fragment targets so KOReader gets native
-    -- chapter navigation, chapter ticks/divisions, and accurate page numbers.
-    local toc_by_fid = {}
+    -- Keep the KF8 fragment anchors inline and otherwise untouched.  A fragment
+    -- boundary may legally fall in the middle of a text node (or even a word),
+    -- so inserting block elements here corrupts the document.  AZW3Document
+    -- exposes these anchors to KOReader as a native ToC instead.
     for _, item in ipairs(toc) do
-        toc_by_fid[item.fid] = item
-    end
-    for i, part in ipairs(parts) do
-        parts[i] = part:gsub('<a id="azwfid([0-9A-V]+)"></a>', function(fid_text)
-            local n = base32_decode(fid_text)
-            local item = n and toc_by_fid[n]
-            if not item then return '<a id="azwfid' .. fid_text .. '"></a>' end
-            local level = math.max(1, math.min(6, item.depth or 1))
-            return string.format('<a id="azwfid%s"></a><h%d class="azw-toc-marker">%s</h%d>',
-                fid_text, level, html_escape(item.title), level)
-        end)
+        item.anchor = "#azwfid" .. base32_encode(item.fid, 4)
     end
 
     local body = extract_bodies(parts)
@@ -601,7 +591,7 @@ function M.extract(path)
         metadata.title and ('<title>' .. html_escape(metadata.title) .. '</title>') or '',
         metadata.author and ('<meta name="author" content="' .. html_escape(metadata.author) .. '" />') or '',
         table.concat(css_links, "\n"),
-        '<style>.azw-part{display:block} .azw-part + div[style]{height:0} .azw-toc-marker{font-size:1px!important;line-height:1px!important;height:0!important;overflow:hidden!important;margin:0!important;padding:0!important;color:transparent!important}</style>',
+        '<style>.azw-part{display:block} .azw-part + div[style]{height:0}</style>',
         '</head><body>', body, '</body></html>'
     }, "\n")
 

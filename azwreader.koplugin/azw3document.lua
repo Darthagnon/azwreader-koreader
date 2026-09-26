@@ -30,6 +30,44 @@ function AZW3Document:loadDocument(full_document)
     return self._loaded
 end
 
+
+function AZW3Document:getToc()
+    local source_toc = self._azw_info and self._azw_info.toc
+    if not source_toc or #source_toc == 0 then
+        return CreDocument.getToc(self)
+    end
+
+    -- Resolve the inline KF8 fragment anchors only after CREngine has built its
+    -- DOM.  Returning both page and xpointer gives ReaderToc accurate chapter
+    -- divisions as well as precise navigation without modifying book content.
+    self:loadDocument()
+    local toc = {}
+    local last_page = 1
+    for _, item in ipairs(source_toc) do
+        local xp = item.anchor
+        local page
+        if xp and self:isXPointerInDocument(xp) then
+            local ok, resolved = pcall(self.getPageFromXPointer, self, xp)
+            if ok and type(resolved) == "number" and resolved > 0 then
+                page = resolved
+            end
+        end
+
+        -- A malformed target should not make KOReader reject the whole ToC.
+        -- Keep ordering stable and use the previous valid page as a fallback.
+        page = page or last_page
+        if page < last_page then page = last_page end
+        last_page = page
+        toc[#toc + 1] = {
+            title = item.title,
+            depth = item.depth or 1,
+            page = page,
+            xpointer = xp,
+        }
+    end
+    return toc
+end
+
 function AZW3Document:getDocumentProps()
     local props = CreDocument.getDocumentProps(self) or {}
     local meta = self._azw_info and self._azw_info.metadata or {}

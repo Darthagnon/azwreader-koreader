@@ -1,29 +1,32 @@
-# AZW/KF8 Reader for KOReader v0.3
+# AZW/KF8 Reader for KOReader — v0.4
 
-Experimental KOReader plugin for DRM-free Amazon AZW/AZW3 (KF8) books.
+Adds DRM-free standalone KF8/AZW3 reading to KOReader by reconstructing the
+KF8 PalmDB/MOBI container into cached HTML/CSS/images and rendering it with
+CREngine.
 
-## v0.3
+## v0.4
 
-- Reads EXTH title, author, language, publisher and cover metadata.
-- Extracts and exposes the actual cover to KOReader.
-- Reads KF8 NCX navigation where useful.
-- Falls back like Calibre to the inline contents page when the KF8 NCX is sparse.
-- Injects semantic, zero-height chapter markers at reconstructed Kindle positions so CREngine supplies KOReader's native table of contents, chapter ticks/divisions and chapter navigation.
-- Uses a versioned extraction cache so v0.2 cached HTML is not reused.
+- Fixes text being cut off when a KF8 fragment boundary occurs inside a
+  paragraph or word.
+- Removes the synthetic hidden heading injection used by v0.3.
+- Exposes the extracted KF8/inline TOC directly through KOReader's document
+  API instead, retaining chapter navigation and chapter divisions without
+  modifying the visible book text.
+- Fixes duplicated chapter headings caused by the v0.3 TOC markers.
+- Uses a new v04 cache namespace so stale v0.3 HTML is not reused.
 
-## Existing support
+## Supported
 
-- Standalone KF8/AZW3 (MOBI version 8)
-- Uncompressed KF8
-- PalmDOC-compressed KF8
-- SKEL/DIV reconstruction
-- FDST flows
-- Images and CSS
-- `kindle:embed`, `kindle:flow`, `kindle:pos` links
+- Standalone MOBI 8 / KF8 / AZW3
+- No DRM
+- Uncompressed or PalmDOC-compressed text
+- Images, CSS/SVG flows, internal hyperlinks
+- EXTH metadata and cover
+- NCX with inline-contents fallback
 
-## Not supported yet
+## Not yet supported
 
+- HUFF/CDIC-compressed KF8
+- Joint MOBI6+KF8 containers
 - DRM
 - KFX
-- HUFF/CDIC compressed KF8
-- Joint MOBI6+KF8 files
