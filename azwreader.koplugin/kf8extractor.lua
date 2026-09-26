@@ -275,7 +275,25 @@ local function read_index(sections, idx0)
             table_out[#table_out + 1] = { ident = ident, tags = get_tag_map(control_count, tags, payload) }
         end
     end
-    return table_out
+    local cncx = {}
+    if mh.ncncx and mh.ncncx > 0 then
+        local record_offset = 0
+        local first_cncx0 = idx0 + mh.count + 1
+        for sec0 = first_cncx0, first_cncx0 + mh.ncncx - 1 do
+            local data = sections[sec0 + 1]
+            if data then
+                local pos = 1
+                while pos <= #data do
+                    local len, used = decint(data, pos)
+                    if not len or len <= 0 then break end
+                    cncx[(pos - 1) + record_offset] = data:sub(pos + used, pos + used + len - 1)
+                    pos = pos + used + len
+                end
+            end
+            record_offset = record_offset + 0x10000
+        end
+    end
+    return table_out, cncx
 end
 
 local B32 = "0123456789ABCDEFGHIJKLMNOPQRSTUV"
@@ -308,6 +326,52 @@ local function image_ext(data)
     if data:sub(1, 2) == "BM" then return "bmp" end
 end
 
+local function trim(s)
+    return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function text_label(html)
+    local s = html:gsub("<[^>]+>", " "):gsub("%s+", " ")
+    return trim(s)
+end
+
+local function html_escape(s)
+    return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"))
+end
+
+local function parse_exth(header)
+    local meta = { authors = {} }
+    local mobi_len = u32(header, 20)
+    local pos = 16 + mobi_len
+    if header:sub(pos + 1, pos + 4) ~= "EXTH" then return meta end
+    local total = u32(header, pos + 4)
+    local count = u32(header, pos + 8)
+    local p = pos + 12
+    local finish = math.min(#header, pos + total)
+    for _ = 1, count do
+        if p + 8 > finish then break end
+        local typ = u32(header, p)
+        local len = u32(header, p + 4)
+        if len < 8 or p + len > #header then break end
+        local value = header:sub(p + 9, p + len)
+        if typ == 100 then
+            meta.authors[#meta.authors + 1] = value
+        elseif typ == 101 then meta.publisher = value
+        elseif typ == 103 then meta.description = value
+        elseif typ == 105 then meta.subject = value
+        elseif typ == 106 then meta.date = value
+        elseif typ == 201 and #value >= 4 then meta.cover_offset = u32(value, 0)
+        elseif typ == 202 and #value >= 4 then meta.thumb_offset = u32(value, 0)
+        elseif typ == 503 then meta.title = value
+        elseif typ == 504 then meta.asin = value
+        elseif typ == 524 then meta.language = value
+        end
+        p = p + len
+    end
+    if #meta.authors > 0 then meta.author = table.concat(meta.authors, "\n") end
+    return meta
+end
+
 local function extract_bodies(parts)
     local out = {}
     for i, part in ipairs(parts) do
@@ -336,6 +400,8 @@ function M.extract(path)
     local dividx = u32(header, 0xF8)
     local fdstidx = u32(header, 0xC0)
     local first_image = u32(header, 0x6C)
+    local ncxidx = (#header >= 0x108) and u32(header, 0x104) or NULL_INDEX
+    local metadata = parse_exth(header)
 
     if skelidx == NULL_INDEX or dividx == NULL_INDEX then
         error("KF8 has no SKEL/DIV reconstruction indexes")
@@ -408,11 +474,9 @@ function M.extract(path)
     local unique_id = u32(header, 32)
     local cache_root = DataStorage:getDataDir() .. "/cache/azwreader"
     util.makePath(cache_root)
-    local cache_dir = string.format("%s/%08x_%d", cache_root, unique_id, #raw)
+    local cache_dir = string.format("%s/v03_%08x_%d", cache_root, unique_id, #raw)
     util.makePath(cache_dir)
     local html_path = cache_dir .. "/book.html"
-    local cached = io.open(html_path, "rb")
-    if cached then cached:close(); return html_path end
 
     local resource_map = {}
     if first_image ~= NULL_INDEX and first_image < #sections then
@@ -427,6 +491,12 @@ function M.extract(path)
             end
             ridx = ridx + 1
         end
+    end
+
+    local cover_path
+    if metadata.cover_offset ~= nil then
+        cover_path = resource_map[metadata.cover_offset + 1]
+        if cover_path then cover_path = cache_dir .. "/" .. cover_path end
     end
 
     local flow_map = {}
@@ -448,6 +518,59 @@ function M.extract(path)
             end)
         end
         write_all(cache_dir .. "/" .. name, data)
+    end
+
+    -- Build a Calibre-style navigation fallback. Many KF8 books have a tiny NCX
+    -- and put the real chapter list in an inline contents page. First try NCX;
+    -- if it is not useful, use the densest internal-link page as the inline ToC.
+    local toc = {}
+    if ncxidx ~= NULL_INDEX then
+        local ok_ncx, ncx, cncx = pcall(read_index, sections, ncxidx)
+        if ok_ncx and ncx then
+            for _, entry in ipairs(ncx) do
+                local tags = entry.tags
+                local title_offset = tags[3] and tags[3][1]
+                local title = title_offset and cncx and cncx[title_offset]
+                local posfid = tags[6]
+                if title and posfid and posfid[1] ~= nil then
+                    toc[#toc + 1] = { title = title, fid = posfid[1], depth = (tags[4] and tags[4][1] or 0) + 1 }
+                end
+            end
+        end
+    end
+
+    if #toc < 3 then
+        toc = {}
+        local best = {}
+        for _, part in ipairs(parts) do
+            local links = {}
+            for href, label_html in part:gmatch('<[aA][^>]-href=["\'](kindle:pos:fid:[0-9A-Va-v]+:off:[0-9A-Va-v]+)["\'][^>]*>(.-)</[aA]>') do
+                local fid = href:match('kindle:pos:fid:([0-9A-Va-v]+)')
+                local n = fid and base32_decode(fid)
+                local label = text_label(label_html)
+                if n and label ~= "" then links[#links + 1] = { title = label, fid = n, depth = 1 } end
+            end
+            if #links > #best then best = links end
+        end
+        if #best >= 2 then toc = best end
+    end
+
+    -- CREngine builds its native ToC from heading elements. Inject zero-height
+    -- semantic headings at the Kindle fragment targets so KOReader gets native
+    -- chapter navigation, chapter ticks/divisions, and accurate page numbers.
+    local toc_by_fid = {}
+    for _, item in ipairs(toc) do
+        toc_by_fid[item.fid] = item
+    end
+    for i, part in ipairs(parts) do
+        parts[i] = part:gsub('<a id="azwfid([0-9A-V]+)"></a>', function(fid_text)
+            local n = base32_decode(fid_text)
+            local item = n and toc_by_fid[n]
+            if not item then return '<a id="azwfid' .. fid_text .. '"></a>' end
+            local level = math.max(1, math.min(6, item.depth or 1))
+            return string.format('<a id="azwfid%s"></a><h%d class="azw-toc-marker">%s</h%d>',
+                fid_text, level, html_escape(item.title), level)
+        end)
     end
 
     local body = extract_bodies(parts)
@@ -475,15 +598,22 @@ function M.extract(path)
     local html = table.concat({
         '<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><head>',
         '<meta charset="utf-8" />',
+        metadata.title and ('<title>' .. html_escape(metadata.title) .. '</title>') or '',
+        metadata.author and ('<meta name="author" content="' .. html_escape(metadata.author) .. '" />') or '',
         table.concat(css_links, "\n"),
-        '<style>.azw-part{display:block} .azw-part + div[style]{height:0}</style>',
+        '<style>.azw-part{display:block} .azw-part + div[style]{height:0} .azw-toc-marker{font-size:1px!important;line-height:1px!important;height:0!important;overflow:hidden!important;margin:0!important;padding:0!important;color:transparent!important}</style>',
         '</head><body>', body, '</body></html>'
     }, "\n")
 
     write_all(html_path, html)
     logger.info("AZW/KF8 Reader: extracted", path, "to", html_path,
         "parts", #parts, "flows", #flows, "resources", #sections - first_image)
-    return html_path
+    return {
+        html_path = html_path,
+        cover_path = cover_path,
+        metadata = metadata,
+        toc = toc,
+    }
 end
 
 return M
