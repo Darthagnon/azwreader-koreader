@@ -1,19 +1,29 @@
-# AZW/KF8 Reader for KOReader — v0.4
+# AZW/KF8 Reader for KOReader — v0.5
 
 Adds DRM-free standalone KF8/AZW3 reading to KOReader by reconstructing the
 KF8 PalmDB/MOBI container into cached HTML/CSS/images and rendering it with
 CREngine.
 
-## v0.4
+## v0.5
 
-- Fixes text being cut off when a KF8 fragment boundary occurs inside a
-  paragraph or word.
-- Removes the synthetic hidden heading injection used by v0.3.
-- Exposes the extracted KF8/inline TOC directly through KOReader's document
-  API instead, retaining chapter navigation and chapter divisions without
-  modifying the visible book text.
-- Fixes duplicated chapter headings caused by the v0.3 TOC markers.
-- Uses a new v04 cache namespace so stale v0.3 HTML is not reused.
+- Fixes misplaced/cut-off text caused by synthetic fragment anchors changing
+  Calibre/KF8 byte offsets during SKEL/DIV reconstruction.
+- Reconstructs each XHTML part first, then adds fragment anchors in a second
+  right-to-left pass so the original KF8 offsets are never disturbed.
+- Implements Calibre's bad-DIV-offset repair path using the DIV CnCx `aid`
+  target and `start_pos` when an insert position lands inside a tag.
+- Restores semantic headings without duplication: existing source title blocks
+  that match a ToC entry are promoted/replaced with a single `<h1>`.
+- Keeps KOReader ToC/chapter navigation through the document API.
+- Uses a new `v05_...` cache namespace, so v0.3/v0.4 generated HTML is ignored.
+
+## Tested against the supplied books
+
+- *The Lost World (AmazonClassics Edition)*: standalone KF8, 24 XHTML parts,
+  77 DIV fragments. The previously broken phrases around `from the fire.`,
+  `was very slow.`, and `general view.` reconstruct contiguously.
+- *The Jungle Book (AmazonClassics Edition)*: standalone KF8, 34 XHTML parts,
+  69 DIV fragments; the extractor accepts and reconstructs it.
 
 ## Supported
 
@@ -30,3 +40,12 @@ CREngine.
 - Joint MOBI6+KF8 containers
 - DRM
 - KFX
+
+## Calibre wireless transfer note
+
+KOReader's built-in Calibre wireless plugin does not currently advertise
+`azw3` in its default accepted-formats list. This is separate from the local
+AZW reader registration. If you use Calibre Wireless Device Connection,
+KOReader supports a `calibre-extensions.lua` override in its data directory;
+add `azw3` to that list if you want Calibre to send the original AZW3 instead
+of converting/selecting another format.

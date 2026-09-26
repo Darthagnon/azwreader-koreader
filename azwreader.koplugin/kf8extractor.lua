@@ -339,6 +339,26 @@ local function html_escape(s)
     return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"))
 end
 
+-- Return true when a byte insertion offset falls inside an HTML/XML tag.
+-- KF8 DIV offsets are byte offsets into the reconstructed source, not DOM
+-- positions, so we must preserve them exactly while assembling the book.
+local function insertion_inside_tag(s, offset)
+    local head = s:sub(1, offset)
+    local last_lt = head:match(".*()<") or 0
+    local last_gt = head:match(".*()>") or 0
+    return last_lt > last_gt
+end
+
+local function find_aid_tag_end(s, aid)
+    for _, needle in ipairs({ 'aid="' .. aid .. '"', "aid='" .. aid .. "'" }) do
+        local apos = s:find(needle, 1, true)
+        if apos then
+            local gt = s:find(">", apos, true)
+            if gt then return gt end
+        end
+    end
+end
+
 local function parse_exth(header)
     local meta = { authors = {} }
     local mobi_len = u32(header, 20)
@@ -379,6 +399,65 @@ local function extract_bodies(parts)
         out[#out + 1] = '<div class="azw-part" id="azw-part-' .. i .. '">\n' .. body .. "\n</div>"
     end
     return table.concat(out, '\n<div style="page-break-before:always"></div>\n')
+end
+
+local function normalize_heading_text(s)
+    return trim((s or ""):gsub("&nbsp;", " "):gsub("%s+", " "))
+end
+
+local function promote_toc_headings(body, toc)
+    for _, item in ipairs(toc or {}) do
+        local title = item.title or ""
+        if title ~= "" and item.fid ~= nil then
+            local anchor_id = "azwfid" .. base32_encode(item.fid, 4)
+            local anchor = '<a id="' .. anchor_id .. '"></a>'
+            local apos = body:find(anchor, 1, true)
+            if apos then
+                local after = apos + #anchor
+                local tail = body:sub(after)
+                local wanted = normalize_heading_text(title)
+                local replaced = false
+
+                -- Common AmazonClassics chapter layout: chapter number and
+                -- subtitle are two adjacent simple DIVs. Replace both source
+                -- blocks with one semantic H1 instead of adding a duplicate.
+                local ws, attrs1, text1, attrs2, text2, rest = tail:match(
+                    "^(%s*)<div([^>]*)>([^<]-)</div>%s*<div([^>]*)>([^<]-)</div>(.*)$")
+                if ws and normalize_heading_text(text1 .. " " .. text2) == wanted then
+                    local heading = ws .. '<h1 class="azw-chapter-heading">' .. html_escape(title) .. '</h1>'
+                    body = body:sub(1, after - 1) .. heading .. rest
+                    replaced = true
+                end
+
+                if not replaced then
+                    -- A single source heading block already carries the ToC
+                    -- text. Promote it in place rather than inventing new text.
+                    local ws1, attrs1b, text1b, rest1 = tail:match(
+                        "^(%s*)<div([^>]*)>([^<]-)</div>(.*)$")
+                    if ws1 and normalize_heading_text(text1b) == wanted then
+                        local heading = ws1 .. '<h1 class="azw-chapter-heading">' .. text1b .. '</h1>'
+                        body = body:sub(1, after - 1) .. heading .. rest1
+                        replaced = true
+                    end
+                end
+
+                if not replaced then
+                    -- Some KF8 title pages wrap the visible title in a single
+                    -- container DIV. Preserve the container and promote only
+                    -- its one simple child to H1.
+                    local ws2, outer_attrs, inner_ws, inner_attrs, text1c, inner_tail, rest2 = tail:match(
+                        "^(%s*)<div([^>]*)>(%s*)<div([^>]*)>([^<]-)</div>(%s*)</div>(.*)$")
+                    if ws2 and normalize_heading_text(text1c) == wanted then
+                        local rebuilt = ws2 .. '<div' .. outer_attrs .. '>' .. inner_ws
+                            .. '<h1 class="azw-chapter-heading">' .. text1c .. '</h1>'
+                            .. inner_tail .. '</div>' .. rest2
+                        body = body:sub(1, after - 1) .. rebuilt
+                    end
+                end
+            end
+        end
+    end
+    return body
 end
 
 function M.extract(path)
@@ -440,7 +519,7 @@ function M.extract(path)
     end
 
     local skels = read_index(sections, skelidx)
-    local divs = read_index(sections, dividx)
+    local divs, div_cncx = read_index(sections, dividx)
     local text = flows[1]
     local parts = {}
     local divptr = 1
@@ -452,6 +531,7 @@ function M.extract(path)
         local skelpos, skellen = t6[1], t6[2]
         local baseptr = skelpos + skellen
         local skeleton = text:sub(skelpos + 1, baseptr)
+        local anchor_points = {}
 
         for _ = 1, divcount do
             local d = divs[divptr]
@@ -461,20 +541,53 @@ function M.extract(path)
             local insertpos = tonumber(d.ident)
             local startpos, length = t6d[1], t6d[2]
             local fragment = text:sub(baseptr + 1, baseptr + length)
-            local anchor = '<a id="azwfid' .. base32_encode(divptr - 1, 4) .. '"></a>'
-            fragment = anchor .. fragment
             local ip = insertpos - skelpos
+
+            -- Match Calibre's KF8 repair path for bad DIV insert offsets.
+            -- Some books point a couple of bytes into a tag; tag 2 identifies
+            -- the containing aid= element and tag 6 gives the relative offset.
+            if insertion_inside_tag(skeleton, ip) then
+                local t2 = d.tags[2]
+                local idtext = t2 and div_cncx and div_cncx[t2[1]]
+                local aid = idtext and idtext:match("aid=['\"]([^'\"]+)['\"]")
+                local tag_end = aid and find_aid_tag_end(skeleton, aid)
+                if tag_end then
+                    local corrected = tag_end + startpos
+                    logger.warn("AZW/KF8 Reader: corrected DIV insert position", ip, "to", corrected, "fid", divptr - 1)
+                    ip = corrected
+                end
+            end
+
+            if ip < 0 or ip > #skeleton then
+                error("invalid KF8 DIV insert position " .. tostring(ip))
+            end
+
+            -- IMPORTANT: do not add navigation anchors yet. KF8 insert positions
+            -- are offsets into the unmodified reconstructed XHTML. Adding even
+            -- an empty <a> here shifts every later offset and silently reorders
+            -- text fragments. Assemble first, then add anchors in a second pass.
             skeleton = skeleton:sub(1, ip) .. fragment .. skeleton:sub(ip + 1)
+            anchor_points[#anchor_points + 1] = { fid = divptr - 1, pos = ip }
             baseptr = baseptr + length
             divptr = divptr + 1
         end
+
+        -- Add the synthetic fragment anchors only after this XHTML part is fully
+        -- reconstructed. Insert from right to left so earlier byte positions do
+        -- not move. At this stage the DIV offsets are no longer used.
+        table.sort(anchor_points, function(a, b) return a.pos > b.pos end)
+        for _, ap in ipairs(anchor_points) do
+            local anchor = '<a id="azwfid' .. base32_encode(ap.fid, 4) .. '"></a>'
+            skeleton = skeleton:sub(1, ap.pos) .. anchor .. skeleton:sub(ap.pos + 1)
+        end
+
         parts[#parts + 1] = skeleton
     end
 
     local unique_id = u32(header, 32)
     local cache_root = DataStorage:getDataDir() .. "/cache/azwreader"
     util.makePath(cache_root)
-    local cache_dir = string.format("%s/v04_%08x_%d", cache_root, unique_id, #raw)
+    local cache_dir = string.format("%s/v05_%08x_%d", cache_root, unique_id, #raw)
     util.makePath(cache_dir)
     local html_path = cache_dir .. "/book.html"
 
@@ -576,6 +689,8 @@ function M.extract(path)
         return "#azwfid" .. fid:upper()
     end)
 
+    body = promote_toc_headings(body, toc)
+
     local css_links = {}
     for i = 2, #flows do
         local n = i - 1
@@ -591,7 +706,7 @@ function M.extract(path)
         metadata.title and ('<title>' .. html_escape(metadata.title) .. '</title>') or '',
         metadata.author and ('<meta name="author" content="' .. html_escape(metadata.author) .. '" />') or '',
         table.concat(css_links, "\n"),
-        '<style>.azw-part{display:block} .azw-part + div[style]{height:0}</style>',
+        '<style>.azw-part{display:block} .azw-part + div[style]{height:0} .azw-chapter-heading{display:block;font-size:1.6em;font-weight:bold;text-align:center;margin:1em 0 1em;page-break-before:always}</style>',
         '</head><body>', body, '</body></html>'
     }, "\n")
 

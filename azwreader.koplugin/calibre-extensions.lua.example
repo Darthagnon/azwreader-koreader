@@ -1,0 +1,27 @@
+-- OPTIONAL: copy this to KOReader's data directory as calibre-extensions.lua
+-- only if you use Calibre Wireless Device Connection and want AZW3 sent as-is.
+-- This mirrors KOReader's current default list and adds azw3.
+return {
+    "epub",
+    "fb2",
+    "mobi",
+    "azw",
+    "azw3",
+    "xps",
+    "doc",
+    "docx",
+    "djv",
+    "djvu",
+    "pdf",
+    "cbz",
+    "htm",
+    "html",
+    "xhtml",
+    "pdb",
+    "prc",
+    "rtf",
+    "txt",
+    "md",
+    "chm",
+    "zip",
+}
