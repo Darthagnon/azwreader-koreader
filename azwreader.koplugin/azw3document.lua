@@ -1,4 +1,5 @@
 local CreDocument = require("document/credocument")
+local Document = require("document/document")
 local Extractor = require("kf8extractor")
 local RenderImage = require("ui/renderimage")
 local logger = require("logger")
@@ -72,10 +73,25 @@ function AZW3Document:getDocumentProps()
     local props = CreDocument.getDocumentProps(self) or {}
     local meta = self._azw_info and self._azw_info.metadata or {}
     if meta.title and meta.title ~= "" then props.title = meta.title end
-    if meta.author and meta.author ~= "" then props.authors = meta.author end
+    if meta.author and meta.author ~= "" then props.authors = meta.author; props.author = meta.author end
     if meta.language and meta.language ~= "" then props.language = meta.language end
     if meta.publisher and meta.publisher ~= "" then props.publisher = meta.publisher end
     if meta.description and meta.description ~= "" then props.description = meta.description end
+    return props
+end
+
+-- KOReader/ZenOS may call getProps() with an already-cached metadata table.
+-- Document:getProps() deliberately trusts that cache and would therefore never
+-- ask our getDocumentProps() override for missing fields. Fill any missing
+-- values from the AZW3 EXTH metadata here, especially authors.
+function AZW3Document:getProps(cached_doc_metadata)
+    local props = Document.getProps(self, cached_doc_metadata) or {}
+    local meta = self._azw_info and self._azw_info.metadata or {}
+    if (not props.title or props.title == "") and meta.title and meta.title ~= "" then props.title = meta.title end
+    if (not props.authors or props.authors == "") and meta.author and meta.author ~= "" then props.authors = meta.author end
+    if (not props.author or props.author == "") and meta.author and meta.author ~= "" then props.author = meta.author end
+    if (not props.language or props.language == "") and meta.language and meta.language ~= "" then props.language = meta.language end
+    if (not props.description or props.description == "") and meta.description and meta.description ~= "" then props.description = meta.description end
     return props
 end
 

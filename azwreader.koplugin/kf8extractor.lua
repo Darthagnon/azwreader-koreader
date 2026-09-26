@@ -479,6 +479,7 @@ end
 -- linked CSS; inline author declarations keep the KF8 paragraph geometry intact.
 local function collect_block_layout_styles(css)
     local map = {}
+    local paragraph_classes = {}
     local wanted = {
         ["text-indent"] = true, ["margin-top"] = true, ["margin-bottom"] = true,
         ["margin-left"] = true, ["margin-right"] = true, ["padding-left"] = true,
@@ -506,11 +507,20 @@ local function collect_block_layout_styles(css)
         if #kept > 0 then
             for cls in selector:gmatch("%.([%w_%-]+)") do
                 map[cls] = table.concat(kept, "; ")
+                local align = values["text-align"] and values["text-align"]:lower() or nil
+                -- Kindle KF8 commonly uses DIVs for actual prose paragraphs.
+                -- Treat a class as paragraph-like when it carries paragraph
+                -- geometry, while excluding centered display/title blocks.
+                if align ~= "center" and (values["text-indent"] ~= nil
+                    or align == "justify"
+                    or values["margin-bottom"] ~= nil) then
+                    paragraph_classes[cls] = true
+                end
             end
         end
         return selector .. "{" .. decls .. "}"
     end)
-    return map
+    return map, paragraph_classes
 end
 
 local function add_inline_style(attrs, style)
@@ -547,6 +557,46 @@ local function inline_block_layout(body, style_map)
         attrs = add_inline_style(attrs, table.concat(styles, "; "))
         return "<" .. tag .. attrs .. ">"
     end)
+end
+
+
+-- Convert only leaf DIVs that the publisher stylesheet identifies as prose to
+-- semantic P elements. KF8 frequently serializes paragraphs as DIVs; KOReader
+-- applies its paragraph layout machinery to P much more consistently. Structural
+-- containers are left as DIVs because any DIV containing another DIV is skipped.
+local function paragraphize_leaf_divs(body, paragraph_classes)
+    local stack = {}
+    local replacements = {}
+    local pos = 1
+    while true do
+        local a, b, slash, attrs = body:find("<(%/?)[dD][iI][vV]([^>]*)>", pos)
+        if not a then break end
+        if slash == "" then
+            if #stack > 0 then stack[#stack].has_child_div = true end
+            stack[#stack + 1] = { start_pos = a, end_pos = b, attrs = attrs, has_child_div = false }
+        elseif #stack > 0 then
+            local open = table.remove(stack)
+            if not open.has_child_div then
+                local classes = open.attrs:match('class%s*=%s*"([^"]*)"') or open.attrs:match("class%s*=%s*'([^']*)'")
+                local is_para = false
+                if classes then
+                    for cls in classes:gmatch("[^%s]+") do
+                        if paragraph_classes[cls] then is_para = true break end
+                    end
+                end
+                if is_para then
+                    replacements[#replacements + 1] = { a = a, b = b, text = "</p>" }
+                    replacements[#replacements + 1] = { a = open.start_pos, b = open.end_pos, text = "<p" .. open.attrs .. ">" }
+                end
+            end
+        end
+        pos = b + 1
+    end
+    table.sort(replacements, function(x, y) return x.a > y.a end)
+    for _, r in ipairs(replacements) do
+        body = body:sub(1, r.a - 1) .. r.text .. body:sub(r.b + 1)
+    end
+    return body
 end
 -- Kindle page-position spans carry navigation metadata only.  CREngine may
 -- render the formatting whitespace around these empty spans as visible gaps,
@@ -753,7 +803,7 @@ function M.extract(path)
     local unique_id = u32(header, 32)
     local cache_root = DataStorage:getDataDir() .. "/cache/azwreader"
     util.makePath(cache_root)
-    local cache_dir = string.format("%s/v07_%08x_%d", cache_root, unique_id, #raw)
+    local cache_dir = string.format("%s/v08_%08x_%d", cache_root, unique_id, #raw)
     util.makePath(cache_dir)
     local html_path = cache_dir .. "/book.html"
 
@@ -780,6 +830,7 @@ function M.extract(path)
 
     local flow_map = {}
     local block_style_map = {}
+    local paragraph_classes = {}
     for i = 2, #flows do
         local logical = i - 1
         local data = flows[i]
@@ -792,8 +843,9 @@ function M.extract(path)
                 return (n and resource_map[n]) or ""
             end)
             data = normalize_css_for_cre(data)
-            local this_map = collect_block_layout_styles(data)
+            local this_map, this_paragraphs = collect_block_layout_styles(data)
             for k, v in pairs(this_map) do block_style_map[k] = v end
+            for k in pairs(this_paragraphs) do paragraph_classes[k] = true end
         else
             data = data:gsub("kindle:embed:([0-9A-Va-v]+)[^\"']*", function(id)
                 local n = base32_decode(id)
@@ -861,6 +913,7 @@ function M.extract(path)
 
     body = strip_page_markers(body)
     body = promote_toc_headings(body, toc)
+    body = paragraphize_leaf_divs(body, paragraph_classes)
     body = inline_block_layout(body, block_style_map)
 
     local css_links = {}
