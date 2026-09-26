@@ -508,9 +508,6 @@ local function collect_block_layout_styles(css)
             for cls in selector:gmatch("%.([%w_%-]+)") do
                 map[cls] = table.concat(kept, "; ")
                 local align = values["text-align"] and values["text-align"]:lower() or nil
-                -- Kindle KF8 commonly uses DIVs for actual prose paragraphs.
-                -- Treat a class as paragraph-like when it carries paragraph
-                -- geometry, while excluding centered display/title blocks.
                 if align ~= "center" and (values["text-indent"] ~= nil
                     or align == "justify"
                     or values["margin-bottom"] ~= nil) then
@@ -558,50 +555,52 @@ local function inline_block_layout(body, style_map)
         return "<" .. tag .. attrs .. ">"
     end)
 end
-
-
--- Convert only leaf DIVs that the publisher stylesheet identifies as prose to
--- semantic P elements. KF8 frequently serializes paragraphs as DIVs; KOReader
--- applies its paragraph layout machinery to P much more consistently. Structural
--- containers are left as DIVs because any DIV containing another DIV is skipped.
-local function paragraphize_leaf_divs(body, paragraph_classes)
-    local stack = {}
-    local replacements = {}
-    local pos = 1
-    while true do
-        local a, b, slash, attrs = body:find("<(%/?)[dD][iI][vV]([^>]*)>", pos)
-        if not a then break end
-        if slash == "" then
-            if #stack > 0 then stack[#stack].has_child_div = true end
-            stack[#stack + 1] = { start_pos = a, end_pos = b, attrs = attrs, has_child_div = false }
-        elseif #stack > 0 then
-            local open = table.remove(stack)
-            if not open.has_child_div then
-                local classes = open.attrs:match('class%s*=%s*"([^"]*)"') or open.attrs:match("class%s*=%s*'([^']*)'")
-                local is_para = false
-                if classes then
-                    for cls in classes:gmatch("[^%s]+") do
-                        if paragraph_classes[cls] then is_para = true break end
-                    end
-                end
-                if is_para then
-                    replacements[#replacements + 1] = { a = a, b = b, text = "</p>" }
-                    replacements[#replacements + 1] = { a = open.start_pos, b = open.end_pos, text = "<p" .. open.attrs .. ">" }
-                end
-            end
-        end
-        pos = b + 1
-    end
-    table.sort(replacements, function(x, y) return x.a > y.a end)
-    for _, r in ipairs(replacements) do
-        body = body:sub(1, r.a - 1) .. r.text .. body:sub(r.b + 1)
-    end
-    return body
-end
 -- Kindle page-position spans carry navigation metadata only.  CREngine may
 -- render the formatting whitespace around these empty spans as visible gaps,
 -- especially before punctuation. Remove the markers after KF8 reconstruction;
 -- our own azwfid anchors already provide navigation targets.
+
+-- Convert publisher-styled leaf DIVs to semantic P elements in one linear pass.
+-- This deliberately avoids rebuilding the whole HTML string for every paragraph,
+-- which is prohibitively expensive on low-memory Kindle devices.
+local function paragraphize_leaf_divs(body, paragraph_classes)
+    local out = {}
+    local stack = {}
+    local pos = 1
+    while true do
+        local a, b, slash, attrs = body:find("<(%/?)[dD][iI][vV]([^>]*)>", pos)
+        if not a then
+            out[#out + 1] = body:sub(pos)
+            break
+        end
+
+        out[#out + 1] = body:sub(pos, a - 1)
+
+        if slash == "" then
+            if #stack > 0 then stack[#stack].has_child_div = true end
+            local classes = attrs:match('class%s*=%s*"([^"]*)"') or attrs:match("class%s*=%s*'([^']*)'")
+            local candidate = false
+            if classes then
+                for cls in classes:gmatch("[^%s]+") do
+                    if paragraph_classes[cls] then candidate = true break end
+                end
+            end
+            out[#out + 1] = "<div" .. attrs .. ">"
+            stack[#stack + 1] = { out_index = #out, attrs = attrs, candidate = candidate, has_child_div = false }
+        else
+            local open = table.remove(stack)
+            if open and open.candidate and not open.has_child_div then
+                out[open.out_index] = "<p" .. open.attrs .. ">"
+                out[#out + 1] = "</p>"
+            else
+                out[#out + 1] = body:sub(a, b)
+            end
+        end
+        pos = b + 1
+    end
+    return table.concat(out)
+end
+
 local function strip_page_markers(body)
     local marker = '<span[^>]-id=["\']page_[^"\']+["\'][^>]*></span>'
     body = body:gsub(marker .. '%s*([%.,:;!?])', '%1')
@@ -803,7 +802,7 @@ function M.extract(path)
     local unique_id = u32(header, 32)
     local cache_root = DataStorage:getDataDir() .. "/cache/azwreader"
     util.makePath(cache_root)
-    local cache_dir = string.format("%s/v08_%08x_%d", cache_root, unique_id, #raw)
+    local cache_dir = string.format("%s/v081_%08x_%d", cache_root, unique_id, #raw)
     util.makePath(cache_dir)
     local html_path = cache_dir .. "/book.html"
 

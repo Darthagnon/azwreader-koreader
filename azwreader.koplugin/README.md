@@ -1,4 +1,4 @@
-# AZW/KF8 Reader for KOReader — v0.8
+# AZW/KF8 Reader for KOReader — v0.8.1
 
 Adds DRM-free standalone KF8/AZW3 reading to KOReader by reconstructing the
 KF8 PalmDB/MOBI container into cached HTML/CSS/images and rendering it with
@@ -58,7 +58,7 @@ of converting/selecting another format.
 - Converts percentage horizontal padding to equivalent margins for CREngine while retaining text-indent and the rest of the publisher CSS.
 - Uses a v06 cache namespace.
 
-## v0.8 changes
+## v0.7 changes
 
 - Fix KOReader cover rendering call (`RenderImage:renderImageFile`).
 - Fix TOC labels with inline small-caps spans (e.g. `H<span>UNTING</span>` no longer becomes `H UNTING`).
@@ -67,8 +67,10 @@ of converting/selecting another format.
 - Cache namespace bumped to `v07_...`.
 
 
-## v0.8
-- Convert publisher-styled leaf KF8 prose DIVs to semantic `<p>` elements for KOReader/CREngine paragraph layout.
-- Preserve publisher classes and inline layout declarations on converted paragraphs.
-- Fill missing `authors` in `getProps()` directly from EXTH metadata, even when KOReader/ZenOS passes cached metadata.
-- Uses a new `v08_...` extraction cache namespace.
+## v0.8.1 changes
+
+- Rebased on the stable v0.7 renderer/cover path.
+- Fixes the v0.8 low-memory crash: paragraph conversion is now a single linear pass instead of repeatedly rebuilding the complete HTML string.
+- Converts publisher-styled leaf KF8 prose DIVs to semantic `<p>` elements while leaving structural DIVs intact.
+- Adds a `getProps()` metadata fallback so cached ZenOS/KOReader metadata can still receive the embedded EXTH author.
+- Uses a new `v081_...` extraction cache namespace.

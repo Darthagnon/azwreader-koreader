@@ -80,10 +80,8 @@ function AZW3Document:getDocumentProps()
     return props
 end
 
--- KOReader/ZenOS may call getProps() with an already-cached metadata table.
--- Document:getProps() deliberately trusts that cache and would therefore never
--- ask our getDocumentProps() override for missing fields. Fill any missing
--- values from the AZW3 EXTH metadata here, especially authors.
+-- ZenOS may hand KOReader a cached metadata table. Fill missing author/title
+-- fields from the AZW3 EXTH data even in that path.
 function AZW3Document:getProps(cached_doc_metadata)
     local props = Document.getProps(self, cached_doc_metadata) or {}
     local meta = self._azw_info and self._azw_info.metadata or {}
