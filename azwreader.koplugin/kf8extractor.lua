@@ -331,8 +331,19 @@ local function trim(s)
 end
 
 local function text_label(html)
-    local s = html:gsub("<[^>]+>", " "):gsub("%s+", " ")
-    return trim(s)
+    -- TOC labels are usually made from inline styling spans (small caps,
+    -- italics, etc.).  Replacing each tag with a space corrupts words such as
+    -- H<span>UNTING</span> into "H UNTING". Strip inline markup instead.
+    local s = html:gsub("<[^>]+>", "")
+    s = s:gsub("&nbsp;", " "):gsub("&#160;", " ")
+    s = s:gsub("&amp;", "&"):gsub("&lt;", "<"):gsub("&gt;", ">")
+    s = s:gsub("&quot;", '"'):gsub("&apos;", "'")
+    s = trim(s:gsub("%s+", " "))
+    -- Kindle small-caps spans are often surrounded by source newlines. After
+    -- stripping the spans, remove whitespace that was only formatting markup.
+    s = s:gsub("%s+([%-%.,:;!?])", "%1")
+    s = s:gsub("%s+([’'])", "%1")
+    return s
 end
 
 local function html_escape(s)
@@ -425,27 +436,118 @@ end
 -- Kindle-generated block layouts used by AZW3.  Preserve the same effective
 -- horizontal inset by folding percentage padding into percentage margins.
 -- Publisher declarations are otherwise left alone.
+local function pct_to_em(value)
+    -- KF8 percentage indents are relative to the content box. CREngine's HTML
+    -- path is inconsistent with percentage horizontal spacing on Kindle DIVs.
+    -- Amazon's common 6.719% first-line indent maps closely to ~1.7em, so use
+    -- the same proportional conversion for the related inset values.
+    return value * 0.25
+end
+
+local function convert_horizontal_percentages(decls)
+    for _, prop in ipairs({ "margin-left", "margin-right", "padding-left", "padding-right", "text-indent" }) do
+        local patt = prop:gsub("%-", "%%-") .. "%s*:%s*([%+%-]?[%d%.]+)%%"
+        decls = decls:gsub(patt, function(v)
+            return string.format("%s: %.6gem", prop, pct_to_em(tonumber(v)))
+        end)
+    end
+    return decls
+end
+
 local function normalize_css_for_cre(css)
     return css:gsub("([^{}]+){([^{}]*)}", function(selector, decls)
+        -- First preserve the effective Kindle box-model inset by folding
+        -- percentage padding into margins. Then convert horizontal percentages
+        -- to em units, which CREngine applies reliably to HTML DIVs.
         local pl = tonumber(decls:match("padding%-left%s*:%s*([%+%-]?[%d%.]+)%%"))
         local pr = tonumber(decls:match("padding%-right%s*:%s*([%+%-]?[%d%.]+)%%"))
-        if not pl and not pr then return selector .. "{" .. decls .. "}" end
-
-        local ml = tonumber(decls:match("margin%-left%s*:%s*([%+%-]?[%d%.]+)%%")) or 0
-        local mr = tonumber(decls:match("margin%-right%s*:%s*([%+%-]?[%d%.]+)%%")) or 0
-        local extra = {}
         if pl then
-            extra[#extra + 1] = string.format("margin-left: %.6g%%", ml + pl)
-            extra[#extra + 1] = "padding-left: 0"
+            local ml = tonumber(decls:match("margin%-left%s*:%s*([%+%-]?[%d%.]+)%%")) or 0
+            decls = decls .. string.format("; margin-left: %.6g%%; padding-left: 0", ml + pl)
         end
         if pr then
-            extra[#extra + 1] = string.format("margin-right: %.6g%%", mr + pr)
-            extra[#extra + 1] = "padding-right: 0"
+            local mr = tonumber(decls:match("margin%-right%s*:%s*([%+%-]?[%d%.]+)%%")) or 0
+            decls = decls .. string.format("; margin-right: %.6g%%; padding-right: 0", mr + pr)
         end
-        return selector .. "{" .. decls .. "; " .. table.concat(extra, "; ") .. "}"
+        decls = convert_horizontal_percentages(decls)
+        return selector .. "{" .. decls .. "}"
     end)
 end
 
+-- Parse the publisher stylesheet's layout declarations so we can mirror them
+-- as inline styles. CREngine/KOReader may apply its reading stylesheet after
+-- linked CSS; inline author declarations keep the KF8 paragraph geometry intact.
+local function collect_block_layout_styles(css)
+    local map = {}
+    local wanted = {
+        ["text-indent"] = true, ["margin-top"] = true, ["margin-bottom"] = true,
+        ["margin-left"] = true, ["margin-right"] = true, ["padding-left"] = true,
+        ["padding-right"] = true, ["text-align"] = true,
+    }
+    local order = {
+        "text-indent", "margin-top", "margin-bottom", "margin-left",
+        "margin-right", "padding-left", "padding-right", "text-align"
+    }
+    css:gsub("([^{}]+){([^{}]*)}", function(selector, decls)
+        decls = convert_horizontal_percentages(decls)
+        -- CSS uses the last declaration of equal specificity, so retain the
+        -- last value rather than the first one in our normalized rules.
+        local values = {}
+        for prop, value in decls:gmatch("([%w%-]+)%s*:%s*([^;{}]+)") do
+            prop = prop:lower()
+            if wanted[prop] then values[prop] = trim(value) end
+        end
+        local kept = {}
+        for _, prop in ipairs(order) do
+            if values[prop] then
+                kept[#kept + 1] = prop .. ": " .. values[prop] .. " !important"
+            end
+        end
+        if #kept > 0 then
+            for cls in selector:gmatch("%.([%w_%-]+)") do
+                map[cls] = table.concat(kept, "; ")
+            end
+        end
+        return selector .. "{" .. decls .. "}"
+    end)
+    return map
+end
+
+local function add_inline_style(attrs, style)
+    local changed = false
+    attrs = attrs:gsub('style%s*=%s*"([^"]*)"', function(existing)
+        changed = true
+        local sep = existing:match(";%s*$") and " " or "; "
+        return 'style="' .. existing .. sep .. style .. '"'
+    end, 1)
+    if not changed then
+        attrs = attrs:gsub("style%s*=%s*'([^']*)'", function(existing)
+            changed = true
+            local sep = existing:match(";%s*$") and " " or "; "
+            return "style='" .. existing .. sep .. style .. "'"
+        end, 1)
+    end
+    if not changed then attrs = attrs .. ' style="' .. style .. '"' end
+    return attrs
+end
+
+local function inline_block_layout(body, style_map)
+    return body:gsub("<([%a][%w]*)" .. "([^>]*)>", function(tag, attrs)
+        local lower = tag:lower()
+        if lower ~= "div" and lower ~= "p" and not lower:match("^h[1-6]$") then
+            return "<" .. tag .. attrs .. ">"
+        end
+        local classes = attrs:match('class%s*=%s*"([^"]*)"') or attrs:match("class%s*=%s*'([^']*)'")
+        if not classes then return "<" .. tag .. attrs .. ">" end
+        local styles = {}
+        for cls in classes:gmatch("[^%s]+") do
+            if style_map[cls] then styles[#styles + 1] = style_map[cls] end
+        end
+        if #styles == 0 then return "<" .. tag .. attrs .. ">" end
+        attrs = add_inline_style(attrs, table.concat(styles, "; "))
+        return "<" .. tag .. attrs .. ">"
+    end)
+end
 -- Kindle page-position spans carry navigation metadata only.  CREngine may
 -- render the formatting whitespace around these empty spans as visible gaps,
 -- especially before punctuation. Remove the markers after KF8 reconstruction;
@@ -651,7 +753,7 @@ function M.extract(path)
     local unique_id = u32(header, 32)
     local cache_root = DataStorage:getDataDir() .. "/cache/azwreader"
     util.makePath(cache_root)
-    local cache_dir = string.format("%s/v06_%08x_%d", cache_root, unique_id, #raw)
+    local cache_dir = string.format("%s/v07_%08x_%d", cache_root, unique_id, #raw)
     util.makePath(cache_dir)
     local html_path = cache_dir .. "/book.html"
 
@@ -677,6 +779,7 @@ function M.extract(path)
     end
 
     local flow_map = {}
+    local block_style_map = {}
     for i = 2, #flows do
         local logical = i - 1
         local data = flows[i]
@@ -689,6 +792,8 @@ function M.extract(path)
                 return (n and resource_map[n]) or ""
             end)
             data = normalize_css_for_cre(data)
+            local this_map = collect_block_layout_styles(data)
+            for k, v in pairs(this_map) do block_style_map[k] = v end
         else
             data = data:gsub("kindle:embed:([0-9A-Va-v]+)[^\"']*", function(id)
                 local n = base32_decode(id)
@@ -756,6 +861,7 @@ function M.extract(path)
 
     body = strip_page_markers(body)
     body = promote_toc_headings(body, toc)
+    body = inline_block_layout(body, block_style_map)
 
     local css_links = {}
     for i = 2, #flows do

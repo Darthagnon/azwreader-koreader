@@ -1,4 +1,4 @@
-# AZW/KF8 Reader for KOReader — v0.6
+# AZW/KF8 Reader for KOReader — v0.7
 
 Adds DRM-free standalone KF8/AZW3 reading to KOReader by reconstructing the
 KF8 PalmDB/MOBI container into cached HTML/CSS/images and rendering it with
@@ -15,7 +15,7 @@ CREngine.
 - Restores semantic headings without duplication: existing source title blocks
   that match a ToC entry are promoted/replaced with a single `<h1>`.
 - Keeps KOReader ToC/chapter navigation through the document API.
-- Uses a new `v05_...` cache namespace, so v0.3/v0.4 generated HTML is ignored.
+- Uses versioned extraction caches so older generated HTML is ignored.
 
 ## Tested against the supplied books
 
@@ -57,3 +57,11 @@ of converting/selecting another format.
 - Removes empty Kindle page-marker spans that can create visible spacing before punctuation in CREngine.
 - Converts percentage horizontal padding to equivalent margins for CREngine while retaining text-indent and the rest of the publisher CSS.
 - Uses a v06 cache namespace.
+
+## v0.7 changes
+
+- Fix KOReader cover rendering call (`RenderImage:renderImageFile`).
+- Fix TOC labels with inline small-caps spans (e.g. `H<span>UNTING</span>` no longer becomes `H UNTING`).
+- Convert Kindle horizontal percentage layout values to CREngine-friendly `em` values.
+- Mirror publisher paragraph indentation/margins as inline `!important` styles on block elements so KOReader's reader stylesheet does not silently flatten them.
+- Cache namespace bumped to `v07_...`.

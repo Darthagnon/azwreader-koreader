@@ -82,7 +82,9 @@ end
 function AZW3Document:getCoverPageImage()
     local cover = self._azw_info and self._azw_info.cover_path
     if cover then
-        local ok, image = pcall(RenderImage.renderImageFile, cover, false, nil, nil)
+        local ok, image = pcall(function()
+            return RenderImage:renderImageFile(cover, false, nil, nil)
+        end)
         if ok and image then return image end
         logger.warn("AZW/KF8 Reader: failed to render cover", cover)
     end
