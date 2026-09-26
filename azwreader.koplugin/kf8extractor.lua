@@ -402,7 +402,65 @@ local function extract_bodies(parts)
 end
 
 local function normalize_heading_text(s)
-    return trim((s or ""):gsub("&nbsp;", " "):gsub("%s+", " "))
+    return trim(text_label((s or ""):gsub("&nbsp;", " ")):gsub("%s+", " "))
+end
+
+local function add_css_class(attrs, class_name)
+    local changed = false
+    attrs = attrs:gsub('class%s*=%s*"([^"]*)"', function(classes)
+        changed = true
+        return 'class="' .. classes .. ' ' .. class_name .. '"'
+    end, 1)
+    if not changed then
+        attrs = attrs:gsub("class%s*=%s*'([^']*)'", function(classes)
+            changed = true
+            return "class='" .. classes .. " " .. class_name .. "'"
+        end, 1)
+    end
+    if not changed then attrs = attrs .. ' class="' .. class_name .. '"' end
+    return attrs
+end
+
+-- CREngine handles margins more consistently than percentage padding on the
+-- Kindle-generated block layouts used by AZW3.  Preserve the same effective
+-- horizontal inset by folding percentage padding into percentage margins.
+-- Publisher declarations are otherwise left alone.
+local function normalize_css_for_cre(css)
+    return css:gsub("([^{}]+){([^{}]*)}", function(selector, decls)
+        local pl = tonumber(decls:match("padding%-left%s*:%s*([%+%-]?[%d%.]+)%%"))
+        local pr = tonumber(decls:match("padding%-right%s*:%s*([%+%-]?[%d%.]+)%%"))
+        if not pl and not pr then return selector .. "{" .. decls .. "}" end
+
+        local ml = tonumber(decls:match("margin%-left%s*:%s*([%+%-]?[%d%.]+)%%")) or 0
+        local mr = tonumber(decls:match("margin%-right%s*:%s*([%+%-]?[%d%.]+)%%")) or 0
+        local extra = {}
+        if pl then
+            extra[#extra + 1] = string.format("margin-left: %.6g%%", ml + pl)
+            extra[#extra + 1] = "padding-left: 0"
+        end
+        if pr then
+            extra[#extra + 1] = string.format("margin-right: %.6g%%", mr + pr)
+            extra[#extra + 1] = "padding-right: 0"
+        end
+        return selector .. "{" .. decls .. "; " .. table.concat(extra, "; ") .. "}"
+    end)
+end
+
+-- Kindle page-position spans carry navigation metadata only.  CREngine may
+-- render the formatting whitespace around these empty spans as visible gaps,
+-- especially before punctuation. Remove the markers after KF8 reconstruction;
+-- our own azwfid anchors already provide navigation targets.
+local function strip_page_markers(body)
+    local marker = '<span[^>]-id=["\']page_[^"\']+["\'][^>]*></span>'
+    body = body:gsub(marker .. '%s*([%.,:;!?])', '%1')
+    body = body:gsub(marker .. '%s*%)', ')')
+    body = body:gsub(marker .. '%s*%]', ']')
+    body = body:gsub(marker .. '%s*”', '”')
+    body = body:gsub(marker .. '%s*’', '’')
+    body = body:gsub(marker .. '%s*—', '—')
+    body = body:gsub(marker .. '%s*–', '–')
+    body = body:gsub(marker, '')
+    return body
 end
 
 local function promote_toc_headings(body, toc)
@@ -418,38 +476,44 @@ local function promote_toc_headings(body, toc)
                 local wanted = normalize_heading_text(title)
                 local replaced = false
 
-                -- Common AmazonClassics chapter layout: chapter number and
-                -- subtitle are two adjacent simple DIVs. Replace both source
-                -- blocks with one semantic H1 instead of adding a duplicate.
+                -- Preserve Amazon's two-line chapter design.  Promote the
+                -- existing chapter-number and subtitle blocks separately so
+                -- publisher CSS still controls their relative size/spacing.
                 local ws, attrs1, text1, attrs2, text2, rest = tail:match(
-                    "^(%s*)<div([^>]*)>([^<]-)</div>%s*<div([^>]*)>([^<]-)</div>(.*)$")
-                if ws and normalize_heading_text(text1 .. " " .. text2) == wanted then
-                    local heading = ws .. '<h1 class="azw-chapter-heading">' .. html_escape(title) .. '</h1>'
+                    "^(%s*)<div([^>]*)>(.-)</div>%s*<div([^>]*)>(.-)</div>(.*)$")
+                if ws and not text1:find("<div", 1, true) and not text2:find("<div", 1, true)
+                    and normalize_heading_text(text1 .. " " .. text2) == wanted then
+                    local h1attrs = add_css_class(attrs1, "azw-chapter-number")
+                    local h2attrs = add_css_class(attrs2, "azw-chapter-title")
+                    local heading = ws .. '<h1' .. h1attrs .. '>' .. text1 .. '</h1>\n'
+                        .. '<h2' .. h2attrs .. '>' .. text2 .. '</h2>'
                     body = body:sub(1, after - 1) .. heading .. rest
                     replaced = true
                 end
 
                 if not replaced then
-                    -- A single source heading block already carries the ToC
-                    -- text. Promote it in place rather than inventing new text.
+                    -- Single visible title: change only the element name and
+                    -- preserve all publisher classes/inline markup.
                     local ws1, attrs1b, text1b, rest1 = tail:match(
-                        "^(%s*)<div([^>]*)>([^<]-)</div>(.*)$")
-                    if ws1 and normalize_heading_text(text1b) == wanted then
-                        local heading = ws1 .. '<h1 class="azw-chapter-heading">' .. text1b .. '</h1>'
+                        "^(%s*)<div([^>]*)>(.-)</div>(.*)$")
+                    if ws1 and not text1b:find("<div", 1, true)
+                        and normalize_heading_text(text1b) == wanted then
+                        attrs1b = add_css_class(attrs1b, "azw-chapter-heading")
+                        local heading = ws1 .. '<h1' .. attrs1b .. '>' .. text1b .. '</h1>'
                         body = body:sub(1, after - 1) .. heading .. rest1
                         replaced = true
                     end
                 end
 
                 if not replaced then
-                    -- Some KF8 title pages wrap the visible title in a single
-                    -- container DIV. Preserve the container and promote only
-                    -- its one simple child to H1.
+                    -- A title page may wrap its one title block in a container.
                     local ws2, outer_attrs, inner_ws, inner_attrs, text1c, inner_tail, rest2 = tail:match(
-                        "^(%s*)<div([^>]*)>(%s*)<div([^>]*)>([^<]-)</div>(%s*)</div>(.*)$")
-                    if ws2 and normalize_heading_text(text1c) == wanted then
+                        "^(%s*)<div([^>]*)>(%s*)<div([^>]*)>(.-)</div>(%s*)</div>(.*)$")
+                    if ws2 and not text1c:find("<div", 1, true)
+                        and normalize_heading_text(text1c) == wanted then
+                        inner_attrs = add_css_class(inner_attrs, "azw-chapter-heading")
                         local rebuilt = ws2 .. '<div' .. outer_attrs .. '>' .. inner_ws
-                            .. '<h1 class="azw-chapter-heading">' .. text1c .. '</h1>'
+                            .. '<h1' .. inner_attrs .. '>' .. text1c .. '</h1>'
                             .. inner_tail .. '</div>' .. rest2
                         body = body:sub(1, after - 1) .. rebuilt
                     end
@@ -587,7 +651,7 @@ function M.extract(path)
     local unique_id = u32(header, 32)
     local cache_root = DataStorage:getDataDir() .. "/cache/azwreader"
     util.makePath(cache_root)
-    local cache_dir = string.format("%s/v05_%08x_%d", cache_root, unique_id, #raw)
+    local cache_dir = string.format("%s/v06_%08x_%d", cache_root, unique_id, #raw)
     util.makePath(cache_dir)
     local html_path = cache_dir .. "/book.html"
 
@@ -624,6 +688,7 @@ function M.extract(path)
                 local n = base32_decode(id)
                 return (n and resource_map[n]) or ""
             end)
+            data = normalize_css_for_cre(data)
         else
             data = data:gsub("kindle:embed:([0-9A-Va-v]+)[^\"']*", function(id)
                 local n = base32_decode(id)
@@ -689,6 +754,7 @@ function M.extract(path)
         return "#azwfid" .. fid:upper()
     end)
 
+    body = strip_page_markers(body)
     body = promote_toc_headings(body, toc)
 
     local css_links = {}
@@ -705,8 +771,8 @@ function M.extract(path)
         '<meta charset="utf-8" />',
         metadata.title and ('<title>' .. html_escape(metadata.title) .. '</title>') or '',
         metadata.author and ('<meta name="author" content="' .. html_escape(metadata.author) .. '" />') or '',
+        '<style>.azw-part{display:block} .azw-part + div[style]{height:0} h1.azw-chapter-number,h2.azw-chapter-title,h1.azw-chapter-heading{display:block;font-weight:normal;margin:0;text-indent:0;page-break-before:auto;page-break-after:avoid}</style>',
         table.concat(css_links, "\n"),
-        '<style>.azw-part{display:block} .azw-part + div[style]{height:0} .azw-chapter-heading{display:block;font-size:1.6em;font-weight:bold;text-align:center;margin:1em 0 1em;page-break-before:always}</style>',
         '</head><body>', body, '</body></html>'
     }, "\n")
 

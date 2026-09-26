@@ -1,10 +1,10 @@
-# AZW/KF8 Reader for KOReader — v0.5
+# AZW/KF8 Reader for KOReader — v0.6
 
 Adds DRM-free standalone KF8/AZW3 reading to KOReader by reconstructing the
 KF8 PalmDB/MOBI container into cached HTML/CSS/images and rendering it with
 CREngine.
 
-## v0.5
+## v0.6
 
 - Fixes misplaced/cut-off text caused by synthetic fragment anchors changing
   Calibre/KF8 byte offsets during SKEL/DIV reconstruction.
@@ -49,3 +49,11 @@ AZW reader registration. If you use Calibre Wireless Device Connection,
 KOReader supports a `calibre-extensions.lua` override in its data directory;
 add `azw3` to that list if you want Calibre to send the original AZW3 instead
 of converting/selecting another format.
+
+
+## v0.6 rendering fixes
+
+- Preserves two-line publisher chapter headings as separate semantic H1/H2 elements.
+- Removes empty Kindle page-marker spans that can create visible spacing before punctuation in CREngine.
+- Converts percentage horizontal padding to equivalent margins for CREngine while retaining text-indent and the rest of the publisher CSS.
+- Uses a v06 cache namespace.
