@@ -1,12 +1,8 @@
 # AZW/AZW3 plugin for KOReader
 
-[KOReader] is a fantastic ebook reader application that supports all formats of ebook on Amazon Kindles and similar ereader devices. 
+[KOReader] is a fantastic ebook reader application that supports all formats of ebook on Amazon Kindles and similar ereader devices. With this plugin, you can read Amazon's AZW3-format books, which normally cannot open in KOReader. Features working table of contents (TOC), images, hyperlinks. I asked my work's ChatGPT subscription to create a KOReader plugin that can read AZW/AZW3 ebooks, based off [Calibre 4] and [Readest], both of which can read AZW/AZW3 ebooks, and threw a few of my owned AZW3 ebooks at it. Surprisingly, it worked. 
 
-Except for [Amazon's own AZW/AZW3 formats, which are unreadable](https://github.com/koreader/koreader/issues/5845). And [MOBI support is 2nd-class](https://github.com/koreader/koreader/issues/15478), but they do read.
-
-This always seemed a little bit incongruous to me - install a program on your hacked Amazon Kindle to read "all" ebooks, and you can no longer read the device's native formats properly (unless you use the vanilla reader, which means dumping all your books in `/mnt/us/documents`, which makes KUAL or KOReader launch scriptlets difficult to find, making it difficult to read all your other books). 
-
-So I apologise for getting AI to spawn this slop into the world, but at least now we will be able to read AZW/AZW3 ebooks in KOReader with working table of contents (TOC), images, hyperlinks. I asked my work's ChatGPT subscription to create a KOReader plugin that can read AZW/AZW3 ebooks, based off [Calibre 4] and [Readest], both of which can read AZW/AZW3 ebooks, and threw one of my owned AZW3 ebooks at it. Surprisingly, it worked.
+Normally in KOReader [Amazon's own AZW/AZW3 formats are unreadable](https://github.com/koreader/koreader/issues/5845). And [MOBI support is 2nd-class](https://github.com/koreader/koreader/issues/15478), but they do read, albeit without a TOC; I believe the MOBI format is related to AZW/AZW3. This always seemed a little bit incongruous to me - hack your Amazon Kindle to read "all" ebooks, and you can no longer read the device's native formats properly (unless you use the vanilla Kindle reader, which means dumping all your books in `/mnt/us/documents`, which makes KUAL or KOReader launch scriptlets difficult to find, making it difficult to read all your other books). 
 
 ## Usage
 1. Download this repo
@@ -15,6 +11,13 @@ So I apologise for getting AI to spawn this slop into the world, but at least no
 4. Copy over your deDRMed ebooks and read them with KOReader, the way God intended.
 
 Tested with my owned deDRMed AZW3 books from Amazon Classics on Kindle Basic 3.
+
+## Limitations
+- Don't use it to try and read jailbreak AZW files like SpiderCat, Véra, or other known-malformed AZW/AZW3 books. It could crash KOReader or other unpredictable results.
+- Currently untested with AZW3 comics, AZW, DRMed AZW/AZW3, KFX. 
+- **How it works:** Renders AZW3 to HTML/CSS/images in the KOReader cache (`/mnt/us/koreader/cache/azwreader/[version][book-id]/`. I don't know when/if KOReader empties this cache, so if you're running low on space on your Kindle or concerned about flash writes, this could be an issue. Manually empty this folder as needed. 
+- The cache is versioned, so you will probably lose reading progress between plugin updates.
+- Calibre and Readest both read AZW3, but their TOC for some reason does not hyperlink correctly to chapters in my testing. **This plugin fixes that.** It does hyperlink correctly from the TOC to chapter headings. 
 
 ## License
 
