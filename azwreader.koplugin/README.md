@@ -1,4 +1,4 @@
-# AZW/KF8 Reader for KOReader — v0.9
+# AZW/KF8 Reader for KOReader — v0.9.2
 
 Adds DRM-free standalone KF8/AZW3 reading to KOReader by reconstructing the
 KF8 PalmDB/MOBI container into cached HTML/CSS/images and rendering it with
@@ -29,14 +29,13 @@ CREngine.
 
 - Standalone MOBI 8 / KF8 / AZW3
 - No DRM
-- Uncompressed or PalmDOC-compressed text
+- Uncompressed, PalmDOC-compressed, or HUFF/CDIC-compressed KF8 text
 - Images, CSS/SVG flows, internal hyperlinks
 - EXTH metadata and cover
 - NCX with inline-contents fallback
 
 ## Not yet supported
 
-- HUFF/CDIC-compressed KF8
 - Joint MOBI6+KF8 containers
 - DRM
 - KFX
@@ -91,3 +90,13 @@ of converting/selecting another format.
 - Detects MOBI encryption before rendering. Encrypted text is never sent to CREngine as plaintext, preventing the previous gobbledygook display.
 - For DRM-encrypted `.azw`, embedded metadata and cover remain available, while opening the book displays a clear unsupported-DRM notice.
 - The supplied Fifth and Sixth Science Fiction Megapack files are MOBI 6 with encryption type 2; their EXTH metadata and cover records are readable, but their text payload is encrypted.
+
+
+## v0.9.2 changes
+
+- Adds native HUFF/CDIC decompression for DRM-free standalone KF8/AZW3 books.
+- Loads the MOBI HUFF record and all associated CDIC dictionary records, with recursive phrase expansion and memoization.
+- Uses a 32-bit sliding Huffman code window implemented with exact Lua-number arithmetic, avoiding 64-bit bit-operation dependencies on older Kindle/KOReader builds.
+- Keeps the existing KF8 SKEL/DIV reconstruction path unchanged after decompression.
+- Uses a new `v092_...` extraction cache namespace.
+- Validated against the supplied *The Second Science Fiction Megapack*: decompressed output matches the reference Calibre algorithm byte-for-byte (1,676,379 bytes; FDST flows 1,672,014 + 4,365 bytes).

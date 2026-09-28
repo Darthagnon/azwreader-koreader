@@ -127,6 +127,134 @@ local function palmdoc_decompress(data)
     return table.concat(chunks)
 end
 
+
+-- MOBI HUFF/CDIC decompressor. This mirrors Calibre's huffcdic.py logic,
+-- but avoids relying on Lua 64-bit integers: each Huffman decision only needs
+-- the next 32 bits, which we build exactly from at most five source bytes.
+local POW2 = {}
+for i = 0, 32 do POW2[i] = 2 ^ i end
+
+local function huff_code32(data, bitpos)
+    local bytepos = math.floor(bitpos / 8) + 1
+    local shift = bitpos % 8
+    local b1 = data:byte(bytepos) or 0
+    local b2 = data:byte(bytepos + 1) or 0
+    local b3 = data:byte(bytepos + 2) or 0
+    local b4 = data:byte(bytepos + 3) or 0
+    local b5 = data:byte(bytepos + 4) or 0
+    local word = ((b1 * 256 + b2) * 256 + b3) * 256 + b4
+    if shift == 0 then return word end
+    return (word * POW2[shift] + math.floor(b5 / POW2[8 - shift])) % POW2[32]
+end
+
+local function huff_reader_load_huff(huff)
+    if huff:sub(1, 8) ~= "HUFF\0\0\0\24" then
+        error("invalid HUFF header")
+    end
+    local off1, off2 = u32(huff, 8), u32(huff, 12)
+    local reader = { dict1 = {}, mincode = {}, maxcode = {}, dictionary = {} }
+
+    for i = 0, 255 do
+        local v = u32(huff, off1 + i * 4)
+        local codelen = v % 32
+        if codelen == 0 then error("invalid HUFF code length") end
+        local term = (math.floor(v / 128) % 2) == 1
+        if codelen <= 8 and not term then error("invalid HUFF terminal table") end
+        local maxcode = math.floor(v / 256)
+        maxcode = (maxcode + 1) * POW2[32 - codelen] - 1
+        reader.dict1[i + 1] = { codelen = codelen, term = term, maxcode = maxcode }
+    end
+
+    reader.mincode[1] = 0
+    reader.maxcode[1] = 0
+    for codelen = 1, 32 do
+        local minraw = u32(huff, off2 + (codelen - 1) * 8)
+        local maxraw = u32(huff, off2 + (codelen - 1) * 8 + 4)
+        reader.mincode[codelen + 1] = minraw * POW2[32 - codelen]
+        reader.maxcode[codelen + 1] = (maxraw + 1) * POW2[32 - codelen] - 1
+    end
+    return reader
+end
+
+local function huff_reader_load_cdic(reader, cdic)
+    if cdic:sub(1, 8) ~= "CDIC\0\0\0\16" then
+        error("invalid CDIC header")
+    end
+    local phrases, bits = u32(cdic, 8), u32(cdic, 12)
+    if bits > 31 then error("invalid CDIC bit width") end
+    local remaining = phrases - #reader.dictionary
+    local n = math.min(POW2[bits], remaining)
+    if n < 0 then error("invalid CDIC phrase count") end
+
+    for i = 0, n - 1 do
+        local off = u16(cdic, 16 + i * 2)
+        local blen = u16(cdic, 16 + off)
+        local length = blen % 0x8000
+        local literal = blen >= 0x8000
+        local start = 18 + off
+        if start + length > #cdic then error("truncated CDIC phrase") end
+        reader.dictionary[#reader.dictionary + 1] = {
+            data = cdic:sub(start + 1, start + length),
+            literal = literal,
+        }
+    end
+end
+
+local function huff_unpack(reader, data, depth)
+    depth = depth or 0
+    if depth > 64 then error("HUFF/CDIC recursion limit exceeded") end
+    local bitsleft = #data * 8
+    local bitpos = 0
+    local out = {}
+
+    while bitsleft > 0 do
+        local code = huff_code32(data, bitpos)
+        local d = reader.dict1[math.floor(code / POW2[24]) + 1]
+        if not d then error("invalid HUFF prefix") end
+        local codelen, maxcode = d.codelen, d.maxcode
+
+        if not d.term then
+            while codelen <= 32 and code < (reader.mincode[codelen + 1] or 0) do
+                codelen = codelen + 1
+            end
+            if codelen > 32 then error("invalid HUFF code") end
+            maxcode = reader.maxcode[codelen + 1]
+        end
+
+        bitpos = bitpos + codelen
+        bitsleft = bitsleft - codelen
+        if bitsleft < 0 then break end
+
+        local r = math.floor((maxcode - code) / POW2[32 - codelen])
+        local phrase = reader.dictionary[r + 1]
+        if not phrase then error("HUFF dictionary index out of range: " .. tostring(r)) end
+        if not phrase.literal then
+            if phrase.expanding then error("recursive HUFF/CDIC dictionary cycle") end
+            phrase.expanding = true
+            phrase.data = huff_unpack(reader, phrase.data, depth + 1)
+            phrase.literal = true
+            phrase.expanding = nil
+        end
+        out[#out + 1] = phrase.data
+    end
+    return table.concat(out)
+end
+
+local function make_huff_reader(sections, huff_offset, huff_count)
+    if huff_offset == NULL_INDEX or huff_count < 2 then
+        error("HUFF/CDIC compression has no dictionary records")
+    end
+    local huff = sections[huff_offset + 1]
+    if not huff then error("missing HUFF record") end
+    local reader = huff_reader_load_huff(huff)
+    for sec0 = huff_offset + 1, huff_offset + huff_count - 1 do
+        local cdic = sections[sec0 + 1]
+        if not cdic then error("missing CDIC record " .. sec0) end
+        huff_reader_load_cdic(reader, cdic)
+    end
+    return reader
+end
+
 local function decint(data, pos)
     local value, consumed = 0, 0
     while pos + consumed <= #data do
@@ -694,8 +822,11 @@ function M.extract(path)
     local dividx = u32(header, 0xF8)
     local fdstidx = u32(header, 0xC0)
     local first_image = u32(header, 0x6C)
+    local huff_offset = (#header >= 0x78) and u32(header, 0x70) or NULL_INDEX
+    local huff_count = (#header >= 0x78) and u32(header, 0x74) or 0
     local ncxidx = (#header >= 0x108) and u32(header, 0x104) or NULL_INDEX
     local metadata = parse_exth(header)
+    local huff_reader = compression == 0x4448 and make_huff_reader(sections, huff_offset, huff_count) or nil
 
     if skelidx == NULL_INDEX or dividx == NULL_INDEX then
         error("KF8 has no SKEL/DIV reconstruction indexes")
@@ -712,7 +843,7 @@ function M.extract(path)
         elseif compression == 2 then
             chunks[#chunks + 1] = palmdoc_decompress(data)
         elseif compression == 0x4448 then
-            error("HUFF/CDIC-compressed KF8 is not supported yet")
+            chunks[#chunks + 1] = huff_unpack(huff_reader, data)
         else
             error("unknown MOBI compression " .. compression)
         end
@@ -802,7 +933,7 @@ function M.extract(path)
     local unique_id = u32(header, 32)
     local cache_root = DataStorage:getDataDir() .. "/cache/azwreader"
     util.makePath(cache_root)
-    local cache_dir = string.format("%s/v081_%08x_%d", cache_root, unique_id, #raw)
+    local cache_dir = string.format("%s/v092_%08x_%d", cache_root, unique_id, #raw)
     util.makePath(cache_dir)
     local html_path = cache_dir .. "/book.html"
 
