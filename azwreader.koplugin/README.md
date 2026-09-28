@@ -1,4 +1,4 @@
-# AZW/KF8/KFX Reader for KOReader — v0.10
+# AZW/KF8/KFX Reader for KOReader — v0.10.1
 
 Adds DRM-free Amazon AZW/AZW3/KFX reading to KOReader. KF8/AZW3 is
 reconstructed from PalmDB/MOBI records; DRM-free reflowable KFX `CONT`
@@ -129,3 +129,10 @@ of converting/selecting another format.
 - The v0.9.3 KF8/AZW3 extractor is unchanged.
 
 Validated with the supplied DRM-free KFX samples: *Egyptian Mythology* (24 sections / 14 TOC entries), *Self Discipline* (36 / 16), and *Ishtar's Odyssey* (47 / 34).
+
+## v0.10.1 changes
+
+- Fix normal AZW3/KF8 TOC regression introduced by v0.9.3 exact-offset navigation.
+- Prefer a substantial inline Kindle contents page (4+ unique targets) when present and use the proven fragment/FID navigation model for its TOC, chapter headings and `kindle:pos` links.
+- Keep native NCX exact `fid+offset` navigation for books without a useful inline ToC, including HUFF/CDIC KF8 books such as the Silverberg test file.
+- Use a fresh `v0101_...` KF8 cache namespace. KFX extraction remains unchanged.

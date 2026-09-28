@@ -893,7 +893,7 @@ function M.extract(path)
     -- The NCX pointer lives at MOBI header offset 0xF4.  Older versions of
     -- this plugin accidentally read 0x104 (the KF8 "other index" pointer),
     -- so books without a useful inline contents page lost their native ToC.
-    local toc = {}
+    local native_toc = {}
     if ncxidx ~= NULL_INDEX then
         local ok_ncx, ncx, cncx = pcall(read_index, sections, ncxidx)
         if ok_ncx and ncx then
@@ -903,7 +903,7 @@ function M.extract(path)
                 local title = title_offset and cncx and cncx[title_offset]
                 local posfid = tags[6]
                 if title and posfid and posfid[1] ~= nil then
-                    toc[#toc + 1] = {
+                    native_toc[#native_toc + 1] = {
                         title = title,
                         fid = posfid[1],
                         off = posfid[2] or 0,
@@ -925,7 +925,7 @@ function M.extract(path)
         target_offsets[fid] = target_offsets[fid] or {}
         target_offsets[fid][off] = true
     end
-    for _, item in ipairs(toc) do add_target(item.fid, item.off) end
+    for _, item in ipairs(native_toc) do add_target(item.fid, item.off) end
     for fid_s, off_s in text:gmatch("kindle:pos:fid:([0-9A-Va-v]+):off:([0-9A-Va-v]+)") do
         add_target(base32_decode(fid_s), base32_decode(off_s))
     end
@@ -1013,7 +1013,7 @@ function M.extract(path)
     local unique_id = u32(header, 32)
     local cache_root = DataStorage:getDataDir() .. "/cache/azwreader"
     util.makePath(cache_root)
-    local cache_dir = string.format("%s/v093_%08x_%d", cache_root, unique_id, #raw)
+    local cache_dir = string.format("%s/v0101_%08x_%d", cache_root, unique_id, #raw)
     util.makePath(cache_dir)
     local html_path = cache_dir .. "/book.html"
 
@@ -1065,26 +1065,40 @@ function M.extract(path)
         write_all(cache_dir .. "/" .. name, data)
     end
 
-    -- Build a Calibre-style navigation fallback. Many KF8 books have a tiny NCX
-    -- and put the real chapter list in an inline contents page. First try NCX;
-    -- if it is not useful, use the densest internal-link page as the inline ToC.
-    if #toc < 3 then
-        toc = {}
-        local best = {}
-        for _, part in ipairs(parts) do
-            local links = {}
-            for href, label_html in part:gmatch('<[aA][^>]-href=["\'](kindle:pos:fid:[0-9A-Va-v]+:off:[0-9A-Va-v]+)["\'][^>]*>(.-)</[aA]>') do
-                local fid_s, off_s = href:match('kindle:pos:fid:([0-9A-Va-v]+):off:([0-9A-Va-v]+)')
-                local fid = fid_s and base32_decode(fid_s)
-                local off = off_s and base32_decode(off_s) or 0
-                local label = text_label(label_html)
-                if fid and label ~= "" then
-                    links[#links + 1] = { title = label, fid = fid, off = off, depth = 1 }
-                end
+    -- Some KF8 generators emit native NCX fid+offset positions that bunch up
+    -- near the start of the book (the same failure mode seen in Calibre), while
+    -- also shipping a perfectly good inline Kindle contents page.  Historically
+    -- this plugin used the inline links and navigated to the fragment start,
+    -- which is reliable for those books.  Other books (notably the HUFF/CDIC
+    -- Silverberg test case) have no useful inline contents page and require the
+    -- native NCX's exact fid+offset targets.  Detect a substantial inline ToC
+    -- and choose the navigation model per book.
+    local inline_toc = {}
+    for _, part in ipairs(parts) do
+        local links = {}
+        local seen = {}
+        for href, label_html in part:gmatch('<[aA][^>]-href=["\'](kindle:pos:fid:[0-9A-Va-v]+:off:[0-9A-Va-v]+)["\'][^>]*>(.-)</[aA]>') do
+            local fid_s, off_s = href:match('kindle:pos:fid:([0-9A-Va-v]+):off:([0-9A-Va-v]+)')
+            local fid = fid_s and base32_decode(fid_s)
+            local off = off_s and base32_decode(off_s) or 0
+            local label = text_label(label_html)
+            local key = fid and (tostring(fid) .. ":" .. tostring(off)) or nil
+            if fid and label ~= "" and not seen[key] then
+                seen[key] = true
+                links[#links + 1] = { title = label, fid = fid, off = off, depth = 1 }
             end
-            if #links > #best then best = links end
         end
-        if #best >= 2 then toc = best end
+        if #links > #inline_toc then inline_toc = links end
+    end
+
+    local use_inline_toc = #inline_toc >= 4
+    local toc = use_inline_toc and inline_toc or native_toc
+
+    -- Preserve the old fallback for malformed/minimal NCX books whose inline
+    -- contents page contains only two or three entries.
+    if #toc < 2 and #inline_toc >= 2 then
+        toc = inline_toc
+        use_inline_toc = true
     end
 
     -- Keep the KF8 fragment anchors inline and otherwise untouched.  A fragment
@@ -1093,7 +1107,11 @@ function M.extract(path)
     -- exposes these anchors to KOReader as a native ToC instead.
     for _, item in ipairs(toc) do
         item.off = item.off or 0
-        item.anchor = "#" .. position_anchor_id(item.fid, item.off)
+        if use_inline_toc then
+            item.anchor = "#azwfid" .. base32_encode(item.fid, 4)
+        else
+            item.anchor = "#" .. position_anchor_id(item.fid, item.off)
+        end
     end
 
     local body = extract_bodies(parts)
@@ -1105,12 +1123,26 @@ function M.extract(path)
         local n = base32_decode(id)
         return (n and flow_map[n]) or ""
     end)
-    body = body:gsub("kindle:pos:fid:([0-9A-Va-v]+):off:([0-9A-Va-v]+)", function(fid_s, off_s)
-        local fid = base32_decode(fid_s)
-        local off = base32_decode(off_s)
-        if fid == nil or off == nil then return "#" end
-        return "#" .. position_anchor_id(fid, off)
-    end)
+    if use_inline_toc then
+        -- Legacy Kindlegen navigation: offsets in these books are not reliable
+        -- after reconstruction, but the fragment id identifies the correct
+        -- chapter/content block. This is the pre-v0.9.3 behaviour.
+        body = body:gsub("kindle:pos:fid:([0-9A-Va-v]+):off:[0-9A-Va-v]+", function(fid_s)
+            return "#azwfid" .. fid_s:upper()
+        end)
+        -- Exact-offset anchors were gathered before we knew which navigation
+        -- model this book needed. They are unnecessary in FID mode and can sit
+        -- between the fragment anchor and visible chapter title, preventing
+        -- semantic heading promotion. Remove only our synthetic exact anchors.
+        body = body:gsub('<a id="azwpos[0-9A-V_]+"></a>', '')
+    else
+        body = body:gsub("kindle:pos:fid:([0-9A-Va-v]+):off:([0-9A-Va-v]+)", function(fid_s, off_s)
+            local fid = base32_decode(fid_s)
+            local off = base32_decode(off_s)
+            if fid == nil or off == nil then return "#" end
+            return "#" .. position_anchor_id(fid, off)
+        end)
+    end
 
     body = strip_page_markers(body)
     body = promote_toc_headings(body, toc)
