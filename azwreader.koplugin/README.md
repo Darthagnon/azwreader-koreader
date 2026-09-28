@@ -1,8 +1,9 @@
-# AZW/KF8 Reader for KOReader — v0.9.3
+# AZW/KF8/KFX Reader for KOReader — v0.10
 
-Adds DRM-free standalone KF8/AZW3 reading to KOReader by reconstructing the
-KF8 PalmDB/MOBI container into cached HTML/CSS/images and rendering it with
-CREngine.
+Adds DRM-free Amazon AZW/AZW3/KFX reading to KOReader. KF8/AZW3 is
+reconstructed from PalmDB/MOBI records; DRM-free reflowable KFX `CONT`
+containers are decoded from Amazon Ion into cached HTML/images and rendered
+with CREngine.
 
 ## v0.6
 
@@ -33,12 +34,15 @@ CREngine.
 - Images, CSS/SVG flows, internal hyperlinks
 - EXTH metadata and cover
 - NCX with inline-contents fallback
+- DRM-free reflowable KFX (`CONT`) stored as `.azw`, `.kfx`, or `.azw8`
+- KFX title/author/publisher/language metadata and cover
+- KFX reading order, images, TOC/chapter headings, and internal/external hyperlinks
 
 ## Not yet supported
 
 - Joint MOBI6+KF8 containers
 - DRM
-- KFX
+- KFX fixed-layout/comic/print-replica features beyond the reflowable path
 
 ## Calibre wireless transfer note
 
@@ -110,3 +114,18 @@ of converting/selecting another format.
 - Rewrite internal `kindle:pos:fid:...:off:...` hyperlinks to those exact anchors.
 - Promote NCX-matched `<p>` chapter titles to semantic `<h1>` headings as well as the existing `<div>` title forms.
 - Use a fresh `v093_...` cache namespace.
+
+
+## v0.10 changes
+
+- Adds native DRM-free reflowable KFX `CONT` parsing with Amazon Ion decoding.
+- Detects KFX by container signature, so KFX books mislabeled with `.azw` work alongside normal MOBI/AZW files.
+- Registers `.kfx` and `.azw8` in addition to `.azw`.
+- Extracts KFX metadata and embedded cover/resources directly from `$490`, `$164`, and `$417` entities.
+- Rebuilds KFX reading order from `$258`/`$260`/`$259` content entities, including externalized `$145` text.
+- Builds KOReader TOC/chapter navigation from KFX `$389` / `$212` navigation trees and promotes matching text blocks to semantic headings.
+- Rewrites KFX `$266` internal/external link events into HTML hyperlinks and exact EID anchors.
+- Uses a separate `v010_kfx_...` cache namespace.
+- The v0.9.3 KF8/AZW3 extractor is unchanged.
+
+Validated with the supplied DRM-free KFX samples: *Egyptian Mythology* (24 sections / 14 TOC entries), *Self Discipline* (36 / 16), and *Ishtar's Odyssey* (47 / 34).

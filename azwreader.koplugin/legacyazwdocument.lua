@@ -1,6 +1,7 @@
 local CreDocument = require("document/credocument")
 local Document = require("document/document")
 local MobiMeta = require("mobimeta")
+local KFXExtractor = require("kfxextractor")
 local RenderImage = require("ui/renderimage")
 local logger = require("logger")
 
@@ -11,16 +12,20 @@ local LegacyAZWDocument = CreDocument:extend{
 
 function LegacyAZWDocument:init()
     local original = self.file
-    local ok, info = pcall(MobiMeta.inspect, original)
-    if not ok then
-        error("AZW metadata inspection failed: " .. tostring(info))
+    local ok, info
+    if KFXExtractor.is_kfx(original) then
+        ok, info = pcall(KFXExtractor.extract, original)
+        if not ok then error("KFX extraction failed: " .. tostring(info)) end
+    else
+        ok, info = pcall(MobiMeta.inspect, original)
+        if not ok then error("AZW metadata inspection failed: " .. tostring(info)) end
+        if info.encryption ~= 0 then
+            logger.warn("AZW/KF8 Reader: DRM-encrypted legacy AZW detected", original,
+                "MOBI version", info.mobi_version, "encryption", info.encryption)
+        end
     end
     self._azw_info = info
-    self._azw_render_file = info.notice_path or original
-    if info.encryption ~= 0 then
-        logger.warn("AZW/KF8 Reader: DRM-encrypted legacy AZW detected", original,
-            "MOBI version", info.mobi_version, "encryption", info.encryption)
-    end
+    self._azw_render_file = info.html_path or info.notice_path or original
     CreDocument.init(self)
 end
 
@@ -32,6 +37,29 @@ function LegacyAZWDocument:loadDocument(full_document)
         end
     end
     return self._loaded
+end
+
+
+function LegacyAZWDocument:getToc()
+    local source_toc = self._azw_info and self._azw_info.toc
+    if not source_toc or #source_toc == 0 then return CreDocument.getToc(self) end
+    self:loadDocument()
+    local toc, last_page = {}, 1
+    for _, item in ipairs(source_toc) do
+        local xp = item.anchor
+        local page
+        if xp and self:isXPointerInDocument(xp) then
+            local ok, resolved = pcall(self.getPageFromXPointer, self, xp)
+            if ok and type(resolved) == "number" and resolved > 0 then page = resolved end
+        end
+        page = page or last_page
+        if page < last_page then page = last_page end
+        last_page = page
+        toc[#toc + 1] = {
+            title = item.title, depth = item.depth or 1, page = page, xpointer = xp,
+        }
+    end
+    return toc
 end
 
 function LegacyAZWDocument:getDocumentProps()
