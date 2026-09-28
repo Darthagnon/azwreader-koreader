@@ -1,4 +1,4 @@
-# AZW/KF8 Reader for KOReader — v0.8.1
+# AZW/KF8 Reader for KOReader — v0.9
 
 Adds DRM-free standalone KF8/AZW3 reading to KOReader by reconstructing the
 KF8 PalmDB/MOBI container into cached HTML/CSS/images and rendering it with
@@ -74,3 +74,11 @@ of converting/selecting another format.
 - Converts publisher-styled leaf KF8 prose DIVs to semantic `<p>` elements while leaving structural DIVs intact.
 - Adds a `getProps()` metadata fallback so cached ZenOS/KOReader metadata can still receive the embedded EXTH author.
 - Uses a new `v081_...` extraction cache namespace.
+
+
+## v0.9 changes
+
+- Fix legacy `.azw` / MOBI6 books failing to open.
+- Stops routing `.azw` through MuPDF/PdfDocument; legacy AZW is now explicitly handled by KOReader's native CREngine MOBI backend.
+- Keeps `.azw3` / KF8 on the existing Calibre-style reconstruction path.
+- Verified the supplied Fifth and Sixth Science Fiction Megapack files are DRM-free MOBI6/PalmDOC containers with valid EXTH metadata, covers and NCX records.
