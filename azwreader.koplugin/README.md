@@ -82,3 +82,12 @@ of converting/selecting another format.
 - Stops routing `.azw` through MuPDF/PdfDocument; legacy AZW is now explicitly handled by KOReader's native CREngine MOBI backend.
 - Keeps `.azw3` / KF8 on the existing Calibre-style reconstruction path.
 - Verified the supplied Fifth and Sixth Science Fiction Megapack files are DRM-free MOBI6/PalmDOC containers with valid EXTH metadata, covers and NCX records.
+
+## v0.9.1 changes
+
+- Adds a dedicated legacy `.azw` / MOBI6 document path instead of blindly handing `.azw` to another renderer.
+- Parses legacy MOBI/EXTH title, authors, publisher, language, description and cover directly from the container.
+- Supports unencrypted legacy `.azw` rendering through CREngine with the extracted metadata/cover overlaid into KOReader/ZenOS.
+- Detects MOBI encryption before rendering. Encrypted text is never sent to CREngine as plaintext, preventing the previous gobbledygook display.
+- For DRM-encrypted `.azw`, embedded metadata and cover remain available, while opening the book displays a clear unsupported-DRM notice.
+- The supplied Fifth and Sixth Science Fiction Megapack files are MOBI 6 with encryption type 2; their EXTH metadata and cover records are readable, but their text payload is encrypted.
