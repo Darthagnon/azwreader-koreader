@@ -1,4 +1,4 @@
-# AZW/KF8 Reader for KOReader — v0.9.2
+# AZW/KF8 Reader for KOReader — v0.9.3
 
 Adds DRM-free standalone KF8/AZW3 reading to KOReader by reconstructing the
 KF8 PalmDB/MOBI container into cached HTML/CSS/images and rendering it with
@@ -100,3 +100,13 @@ of converting/selecting another format.
 - Keeps the existing KF8 SKEL/DIV reconstruction path unchanged after decompression.
 - Uses a new `v092_...` extraction cache namespace.
 - Validated against the supplied *The Second Science Fiction Megapack*: decompressed output matches the reference Calibre algorithm byte-for-byte (1,676,379 bytes; FDST flows 1,672,014 + 4,365 bytes).
+
+
+## v0.9.3 changes
+
+- Fix the KF8 NCX index pointer: MOBI header offset `0xF4` is NCX; `0x104` is the KF8 other-index pointer.
+- Preserve NCX `fid + off` targets instead of discarding the offset.
+- Create exact synthetic anchors for all NCX and `kindle:pos` targets after DIV reconstruction.
+- Rewrite internal `kindle:pos:fid:...:off:...` hyperlinks to those exact anchors.
+- Promote NCX-matched `<p>` chapter titles to semantic `<h1>` headings as well as the existing `<div>` title forms.
+- Use a fresh `v093_...` cache namespace.

@@ -447,6 +447,10 @@ local function base32_encode(n, width)
     return out
 end
 
+local function position_anchor_id(fid, off)
+    return "azwpos" .. base32_encode(fid, 4) .. "_" .. base32_encode(off or 0, 1)
+end
+
 local function image_ext(data)
     if data:sub(1, 3) == "\255\216\255" then return "jpg" end
     if data:sub(1, 8) == "\137PNG\13\10\26\10" then return "png" end
@@ -486,6 +490,16 @@ local function insertion_inside_tag(s, offset)
     local last_lt = head:match(".*()<") or 0
     local last_gt = head:match(".*()>") or 0
     return last_lt > last_gt
+end
+
+local function safe_fragment_offset(fragment, off)
+    off = math.max(0, math.min(off or 0, #fragment))
+    if insertion_inside_tag(fragment, off) then
+        local head = fragment:sub(1, off)
+        local lt = head:match(".*()<")
+        if lt then return lt - 1 end
+    end
+    return off
 end
 
 local function find_aid_tag_end(s, aid)
@@ -745,8 +759,8 @@ end
 local function promote_toc_headings(body, toc)
     for _, item in ipairs(toc or {}) do
         local title = item.title or ""
-        if title ~= "" and item.fid ~= nil then
-            local anchor_id = "azwfid" .. base32_encode(item.fid, 4)
+        local anchor_id = item.anchor and item.anchor:gsub("^#", "")
+        if title ~= "" and anchor_id and anchor_id ~= "" then
             local anchor = '<a id="' .. anchor_id .. '"></a>'
             local apos = body:find(anchor, 1, true)
             if apos then
@@ -771,11 +785,19 @@ local function promote_toc_headings(body, toc)
                 end
 
                 if not replaced then
-                    -- Single visible title: change only the element name and
-                    -- preserve all publisher classes/inline markup.
+                    -- A large number of Kindlegen books use <p> rather than
+                    -- <div> for their visible chapter-title element.  Promote
+                    -- either form without changing classes/inline styling.
                     local ws1, attrs1b, text1b, rest1 = tail:match(
                         "^(%s*)<div([^>]*)>(.-)</div>(.*)$")
+                    local source_tag = "div"
+                    if not ws1 then
+                        ws1, attrs1b, text1b, rest1 = tail:match(
+                            "^(%s*)<[pP]([^>]*)>(.-)</[pP]>(.*)$")
+                        source_tag = "p"
+                    end
                     if ws1 and not text1b:find("<div", 1, true)
+                        and not text1b:find("<p", 1, true)
                         and normalize_heading_text(text1b) == wanted then
                         attrs1b = add_css_class(attrs1b, "azw-chapter-heading")
                         local heading = ws1 .. '<h1' .. attrs1b .. '>' .. text1b .. '</h1>'
@@ -824,7 +846,7 @@ function M.extract(path)
     local first_image = u32(header, 0x6C)
     local huff_offset = (#header >= 0x78) and u32(header, 0x70) or NULL_INDEX
     local huff_count = (#header >= 0x78) and u32(header, 0x74) or 0
-    local ncxidx = (#header >= 0x108) and u32(header, 0x104) or NULL_INDEX
+    local ncxidx = (#header >= 0xF8) and u32(header, 0xF4) or NULL_INDEX
     local metadata = parse_exth(header)
     local huff_reader = compression == 0x4448 and make_huff_reader(sections, huff_offset, huff_count) or nil
 
@@ -867,6 +889,47 @@ function M.extract(path)
     local skels = read_index(sections, skelidx)
     local divs, div_cncx = read_index(sections, dividx)
     local text = flows[1]
+
+    -- The NCX pointer lives at MOBI header offset 0xF4.  Older versions of
+    -- this plugin accidentally read 0x104 (the KF8 "other index" pointer),
+    -- so books without a useful inline contents page lost their native ToC.
+    local toc = {}
+    if ncxidx ~= NULL_INDEX then
+        local ok_ncx, ncx, cncx = pcall(read_index, sections, ncxidx)
+        if ok_ncx and ncx then
+            for _, entry in ipairs(ncx) do
+                local tags = entry.tags
+                local title_offset = tags[3] and tags[3][1]
+                local title = title_offset and cncx and cncx[title_offset]
+                local posfid = tags[6]
+                if title and posfid and posfid[1] ~= nil then
+                    toc[#toc + 1] = {
+                        title = title,
+                        fid = posfid[1],
+                        off = posfid[2] or 0,
+                        depth = (tags[4] and tags[4][1] or 0) + 1,
+                    }
+                end
+            end
+        end
+    end
+
+    -- Gather every exact fid+offset navigation target before reconstruction.
+    -- NCX targets may exist even when no corresponding kindle:pos link occurs
+    -- in the XHTML.  Conversely, ordinary internal hyperlinks may introduce
+    -- targets not present in the NCX.
+    local target_offsets = {}
+    local function add_target(fid, off)
+        if fid == nil then return end
+        off = off or 0
+        target_offsets[fid] = target_offsets[fid] or {}
+        target_offsets[fid][off] = true
+    end
+    for _, item in ipairs(toc) do add_target(item.fid, item.off) end
+    for fid_s, off_s in text:gmatch("kindle:pos:fid:([0-9A-Va-v]+):off:([0-9A-Va-v]+)") do
+        add_target(base32_decode(fid_s), base32_decode(off_s))
+    end
+
     local parts = {}
     local divptr = 1
 
@@ -912,8 +975,25 @@ function M.extract(path)
             -- are offsets into the unmodified reconstructed XHTML. Adding even
             -- an empty <a> here shifts every later offset and silently reorders
             -- text fragments. Assemble first, then add anchors in a second pass.
+            local fid = divptr - 1
             skeleton = skeleton:sub(1, ip) .. fragment .. skeleton:sub(ip + 1)
-            anchor_points[#anchor_points + 1] = { fid = divptr - 1, pos = ip }
+
+            -- Preserve the historical fragment-start anchor, then add any
+            -- exact fid+offset targets needed by NCX entries or hyperlinks.
+            anchor_points[#anchor_points + 1] = {
+                id = "azwfid" .. base32_encode(fid, 4),
+                pos = ip,
+            }
+            local offsets = target_offsets[fid]
+            if offsets then
+                for off in pairs(offsets) do
+                    local safe_off = safe_fragment_offset(fragment, off)
+                    anchor_points[#anchor_points + 1] = {
+                        id = position_anchor_id(fid, off),
+                        pos = ip + safe_off,
+                    }
+                end
+            end
             baseptr = baseptr + length
             divptr = divptr + 1
         end
@@ -923,7 +1003,7 @@ function M.extract(path)
         -- not move. At this stage the DIV offsets are no longer used.
         table.sort(anchor_points, function(a, b) return a.pos > b.pos end)
         for _, ap in ipairs(anchor_points) do
-            local anchor = '<a id="azwfid' .. base32_encode(ap.fid, 4) .. '"></a>'
+            local anchor = '<a id="' .. ap.id .. '"></a>'
             skeleton = skeleton:sub(1, ap.pos) .. anchor .. skeleton:sub(ap.pos + 1)
         end
 
@@ -933,7 +1013,7 @@ function M.extract(path)
     local unique_id = u32(header, 32)
     local cache_root = DataStorage:getDataDir() .. "/cache/azwreader"
     util.makePath(cache_root)
-    local cache_dir = string.format("%s/v092_%08x_%d", cache_root, unique_id, #raw)
+    local cache_dir = string.format("%s/v093_%08x_%d", cache_root, unique_id, #raw)
     util.makePath(cache_dir)
     local html_path = cache_dir .. "/book.html"
 
@@ -988,32 +1068,19 @@ function M.extract(path)
     -- Build a Calibre-style navigation fallback. Many KF8 books have a tiny NCX
     -- and put the real chapter list in an inline contents page. First try NCX;
     -- if it is not useful, use the densest internal-link page as the inline ToC.
-    local toc = {}
-    if ncxidx ~= NULL_INDEX then
-        local ok_ncx, ncx, cncx = pcall(read_index, sections, ncxidx)
-        if ok_ncx and ncx then
-            for _, entry in ipairs(ncx) do
-                local tags = entry.tags
-                local title_offset = tags[3] and tags[3][1]
-                local title = title_offset and cncx and cncx[title_offset]
-                local posfid = tags[6]
-                if title and posfid and posfid[1] ~= nil then
-                    toc[#toc + 1] = { title = title, fid = posfid[1], depth = (tags[4] and tags[4][1] or 0) + 1 }
-                end
-            end
-        end
-    end
-
     if #toc < 3 then
         toc = {}
         local best = {}
         for _, part in ipairs(parts) do
             local links = {}
             for href, label_html in part:gmatch('<[aA][^>]-href=["\'](kindle:pos:fid:[0-9A-Va-v]+:off:[0-9A-Va-v]+)["\'][^>]*>(.-)</[aA]>') do
-                local fid = href:match('kindle:pos:fid:([0-9A-Va-v]+)')
-                local n = fid and base32_decode(fid)
+                local fid_s, off_s = href:match('kindle:pos:fid:([0-9A-Va-v]+):off:([0-9A-Va-v]+)')
+                local fid = fid_s and base32_decode(fid_s)
+                local off = off_s and base32_decode(off_s) or 0
                 local label = text_label(label_html)
-                if n and label ~= "" then links[#links + 1] = { title = label, fid = n, depth = 1 } end
+                if fid and label ~= "" then
+                    links[#links + 1] = { title = label, fid = fid, off = off, depth = 1 }
+                end
             end
             if #links > #best then best = links end
         end
@@ -1025,7 +1092,8 @@ function M.extract(path)
     -- so inserting block elements here corrupts the document.  AZW3Document
     -- exposes these anchors to KOReader as a native ToC instead.
     for _, item in ipairs(toc) do
-        item.anchor = "#azwfid" .. base32_encode(item.fid, 4)
+        item.off = item.off or 0
+        item.anchor = "#" .. position_anchor_id(item.fid, item.off)
     end
 
     local body = extract_bodies(parts)
@@ -1037,8 +1105,11 @@ function M.extract(path)
         local n = base32_decode(id)
         return (n and flow_map[n]) or ""
     end)
-    body = body:gsub("kindle:pos:fid:([0-9A-Va-v]+):off:[0-9A-Va-v]+", function(fid)
-        return "#azwfid" .. fid:upper()
+    body = body:gsub("kindle:pos:fid:([0-9A-Va-v]+):off:([0-9A-Va-v]+)", function(fid_s, off_s)
+        local fid = base32_decode(fid_s)
+        local off = base32_decode(off_s)
+        if fid == nil or off == nil then return "#" end
+        return "#" .. position_anchor_id(fid, off)
     end)
 
     body = strip_page_markers(body)
