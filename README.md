@@ -3,8 +3,13 @@
 [KOReader] is a fantastic ebook reader application that supports all formats of ebook on Amazon Kindles and similar ereader devices. With this plugin, you can read Amazon's AZW3 and KFX format books, which normally cannot open in KOReader. 
 
 ## Features 
-- Read the books you bought from Amazon, without converting them\*: ..azw3 (KF8)/.azw(KFX) support (\*= remove DRM first)
-- working table of contents (TOC), images, hyperlinks in all formats. 
+- Read the books you bought from Amazon, without converting them\*: .azw3 (KF8)/.azw (KFX) support 
+- working book covers, metadata, table of contents (TOC), images, hyperlinks in all formats. 
+- AZW3 TOC works properly vs. Calibre and Readest
+- Read KFX* format ebooks Calibre does not support by default
+- Converts AZW3 ebooks on the fly to HTML (side effect of decoding method, but maybe someone will find this useful...) 
+
+(\*= remove DRM first)
 
 ## Background
 
@@ -39,11 +44,12 @@ The KFX implementation is based off [jhowell's KFX Conversion Input Plugin](http
 Tested with my owned deDRMed AZW3/KFX books from Amazon Classics, etc. on Kindle Basic 3.
 
 ## Limitations
-- AZW is not properly supported, because: 
+- **AZW is not properly supported**, because: 
   - (a) DeDRMed .azw is just MOBI, which already works in KOReader. 
   - (b) DRMed .azw should display metadata, but cannot be read (custom message displays saying as much). 
   - (c) Epubor outputs some deDRMed KFX books with the .azw file extension. Is that their proper extension? No clue, but KFX works. 
-  - (d) As a result of the aforementioned, I cannot find a single actual .azw file on my PC that I should be able to read; they're all either DRMed .azw (cannot read), converted to MOBI as soon as I deDRM them, or deDRMed KFX masquerading as .azw (and these read just fine). 
+  - (d) As a result of the aforementioned, I cannot find a single actual .azw file on my PC that I should be able to read; they're all either DRMed .azw (cannot read), converted to MOBI as soon as I deDRM them, or deDRMed KFX masquerading as .azw (and these read just fine).
+- MOBI is missing metadata (book covers, authors, tags) and does not have a TOC or section headers. This is a limitation of KOReader's CREngine processing of MOBI as of [v2026.07.1](https://github.com/koreader/koreader/releases/tag/v2026.07.1). From recent commits, I think this will eventually be fixed...
 - Don't use it to try and read jailbreak AZW files like SpiderCat, Véra, or other known-malformed AZW/AZW3 books. It could crash KOReader or other unpredictable results.
 - Currently untested or doesn't work with:
   - large (100MB) AZW3 comics (use CBZ/CBR/PDF instead, keep file sizes small on low-power Kindles)
