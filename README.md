@@ -14,8 +14,8 @@ Tested with my owned deDRMed AZW3 books from Amazon Classics on Kindle Basic 3.
 
 ## Limitations
 - Don't use it to try and read jailbreak AZW files like SpiderCat, Véra, or other known-malformed AZW/AZW3 books. It could crash KOReader or other unpredictable results.
-- Currently untested with AZW3 comics, AZW, DRMed AZW/AZW3, KFX. 
-- **How it works:** Renders AZW3 to HTML/CSS/images in the KOReader cache (`/mnt/us/koreader/cache/azwreader/[version][book-id]/`. I don't know when/if KOReader empties this cache, so if you're running low on space on your Kindle or concerned about flash writes, this could be an issue. Manually empty this folder as needed. 
+- Currently untested (and probably doesn't work with) with AZW3 comics, AZW, DRMed AZW/AZW3, KFX. 
+- **How it works:** Renders KF8 from AZW3 to HTML/CSS/images in the KOReader cache (`/mnt/us/koreader/cache/azwreader/[version][book-id]/`. I don't know when/if KOReader empties this cache, so if you're running low on space on your Kindle or concerned about flash writes, this could be an issue. Manually empty this folder as needed. 
 - The cache is versioned, so you will probably lose reading progress between plugin updates.
 - Calibre and Readest both read AZW3, but their TOC for some reason does not hyperlink correctly to chapters in my testing. **This plugin fixes that.** It does hyperlink correctly from the TOC to chapter headings. 
 
